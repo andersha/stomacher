@@ -191,6 +191,7 @@ private struct InspectorView: View {
     @Binding var replaceTargetID: UUID
     @State private var pendingResize: GridResizeRequest?
     @State private var showingResizeWarning = false
+    @State private var showingOutlineDeleteConfirmation = false
     var exportPDF: () -> Void
 
     var body: some View {
@@ -257,7 +258,7 @@ private struct InspectorView: View {
                         .foregroundStyle(.secondary)
 
                     Button(role: .destructive) {
-                        store.clearOutline()
+                        showingOutlineDeleteConfirmation = true
                     } label: {
                         Label("Fjern ytterkant", systemImage: "xmark.diamond")
                     }
@@ -386,6 +387,12 @@ private struct InspectorView: View {
             }
         } message: {
             Text("Den nye størrelsen vil fjerne \(pendingResize?.croppedCellCount ?? 0) utfylte ruter utenfor rutenettet.")
+        }
+        .alert("Ønsker du å slette ytterkanten?", isPresented: $showingOutlineDeleteConfirmation) {
+            Button("Nei", role: .cancel) {}
+            Button("Ja", role: .destructive) {
+                store.clearOutline()
+            }
         }
     }
 

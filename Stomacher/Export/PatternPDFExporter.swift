@@ -24,7 +24,7 @@ struct PatternPDFExporter {
 
         let titleAttributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 28, weight: .bold),
-            .foregroundColor: UIColor.label
+            .foregroundColor: UIColor.black
         ]
         document.title.draw(at: CGPoint(x: margin, y: margin), withAttributes: titleAttributes)
 
@@ -32,7 +32,7 @@ struct PatternPDFExporter {
         let meta = "\(document.technique.title) · \(document.width) x \(document.height) · \(document.cells.count) utfylte felt · \(outlineText)"
         meta.draw(at: CGPoint(x: margin, y: margin + 42), withAttributes: [
             .font: UIFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: UIColor.secondaryLabel
+            .foregroundColor: UIColor.black
         ])
 
         drawLegend(document: document, origin: CGPoint(x: margin, y: margin + 86))
@@ -41,14 +41,14 @@ struct PatternPDFExporter {
         let note = "Utskriften bruker både farge og symbol slik at mønsteret kan leses selv når fargene er like eller skrives ut i gråtoner. Hver rute svarer til én \(document.technique.unitTitle)."
         note.draw(in: CGRect(x: margin, y: pageRect.height - 92, width: pageRect.width - margin * 2, height: 48), withAttributes: [
             .font: UIFont.systemFont(ofSize: 12),
-            .foregroundColor: UIColor.secondaryLabel
+            .foregroundColor: UIColor.black
         ])
     }
 
     private func drawLegend(document: PatternDocument, origin: CGPoint) {
         "Fargekart".draw(at: origin, withAttributes: [
             .font: UIFont.systemFont(ofSize: 16, weight: .semibold),
-            .foregroundColor: UIColor.label
+            .foregroundColor: UIColor.black
         ])
 
         var y = origin.y + 30
@@ -61,7 +61,7 @@ struct PatternPDFExporter {
 
             "\(swatch.symbol)  \(swatch.name)  \(swatch.hex)".draw(at: CGPoint(x: origin.x + 32, y: y + 2), withAttributes: [
                 .font: UIFont.monospacedSystemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: UIColor.label
+                .foregroundColor: UIColor.black
             ])
             y += 28
         }
@@ -127,13 +127,24 @@ struct PatternPDFExporter {
         let bounds = document.printableBounds
         let pagesX = Int(ceil(Double(bounds.width) / Double(cellsPerPageX)))
         let pagesY = Int(ceil(Double(bounds.height) / Double(cellsPerPageY)))
+        let patternArea = document.activePatternArea()
 
         for pageY in 0..<pagesY {
             for pageX in 0..<pagesX {
+                let startX = bounds.minX + pageX * cellsPerPageX
+                let startY = bounds.minY + pageY * cellsPerPageY
+                let endX = min(bounds.maxX + 1, startX + cellsPerPageX)
+                let endY = min(bounds.maxY + 1, startY + cellsPerPageY)
+
+                guard shouldPrintPage(patternArea: patternArea, startX: startX, startY: startY, endX: endX, endY: endY) else {
+                    continue
+                }
+
                 context.beginPage()
                 drawPatternPage(
                     document: document,
                     bounds: bounds,
+                    patternArea: patternArea,
                     pageX: pageX,
                     pageY: pageY,
                     cellsPerPageX: cellsPerPageX,
@@ -143,19 +154,32 @@ struct PatternPDFExporter {
         }
     }
 
-    private func drawPatternPage(document: PatternDocument, bounds: GridBounds, pageX: Int, pageY: Int, cellsPerPageX: Int, cellsPerPageY: Int) {
+    private func shouldPrintPage(patternArea: Set<GridCoordinate>?, startX: Int, startY: Int, endX: Int, endY: Int) -> Bool {
+        guard let patternArea else { return true }
+
+        for y in startY..<endY {
+            for x in startX..<endX {
+                if patternArea.contains(GridCoordinate(x: x, y: y)) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
+    private func drawPatternPage(document: PatternDocument, bounds: GridBounds, patternArea: Set<GridCoordinate>?, pageX: Int, pageY: Int, cellsPerPageX: Int, cellsPerPageY: Int) {
         let startX = bounds.minX + pageX * cellsPerPageX
         let startY = bounds.minY + pageY * cellsPerPageY
         let endX = min(bounds.maxX + 1, startX + cellsPerPageX)
         let endY = min(bounds.maxY + 1, startY + cellsPerPageY)
         let visibleWidth = endX - startX
         let visibleHeight = endY - startY
-        let patternArea = document.activePatternArea()
 
         let title = "\(document.title) · side \(pageY + 1)-\(pageX + 1)"
         title.draw(at: CGPoint(x: margin, y: 22), withAttributes: [
             .font: UIFont.systemFont(ofSize: 13, weight: .semibold),
-            .foregroundColor: UIColor.label
+            .foregroundColor: UIColor.black
         ])
 
         let gridRect = CGRect(x: margin, y: 54, width: pageRect.width - margin * 2, height: pageRect.height - 96)
@@ -190,7 +214,7 @@ struct PatternPDFExporter {
         let footer = "Kolonner \(startX)-\(endX - 1), rader \(startY)-\(endY - 1)"
         footer.draw(at: CGPoint(x: margin, y: pageRect.height - 32), withAttributes: [
             .font: UIFont.monospacedSystemFont(ofSize: 10, weight: .regular),
-            .foregroundColor: UIColor.secondaryLabel
+            .foregroundColor: UIColor.black
         ])
     }
 
