@@ -8,6 +8,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
     case outline
     case select
     case pipette
+    case replaceColor
 
     var id: String { rawValue }
 
@@ -19,6 +20,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .outline: "Ytterkant"
         case .select: "Marker"
         case .pipette: "Pipette"
+        case .replaceColor: "Bytt farge"
         }
     }
 
@@ -30,6 +32,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .outline: "lasso"
         case .select: "selection.pin.in.out"
         case .pipette: "eyedropper"
+        case .replaceColor: "arrow.triangle.2.circlepath"
         }
     }
 }
@@ -57,28 +60,59 @@ final class PatternStore: ObservableObject {
     @Published var selection = Set<GridCoordinate>()
     @Published var clipboard: [GridCoordinate: UUID] = [:]
     @Published var zoom: CGFloat = 1
-    @Published var usesApplePencilForEditing = false
+    @Published var usesApplePencilForEditing = false {
+        didSet {
+            UserDefaults.standard.set(usesApplePencilForEditing, forKey: Self.applePencilEditingKey)
+        }
+    }
     @Published var lastTouchedCoordinate: GridCoordinate?
     @Published var statusMessage = "Klar"
     @Published var hasUnsavedChanges = false
     @Published var autosaveEnabled = false
+    @Published private(set) var customPalettes: [PatternPalette] = []
     @Published private(set) var currentDocumentURL: URL?
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private static let applePencilEditingKey = "no.abrahamsen.stomacher.usesApplePencilForEditing"
+    private let customPalettesKey = "no.abrahamsen.stomacher.customPalettes"
     private var selectionAnchor: GridCoordinate?
     private var interactionPreviousCoordinate: GridCoordinate?
 
     init(document: PatternDocument = PatternDocument()) {
         self.document = document
         self.selectedSwatchID = document.palette.first?.id ?? UUID()
+        self.usesApplePencilForEditing = UserDefaults.standard.bool(forKey: Self.applePencilEditingKey)
+        self.customPalettes = Self.loadCustomPalettes(key: customPalettesKey)
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         decoder.dateDecodingStrategy = .iso8601
+        normalizeCurrentPalette()
     }
 
     var selectedSwatch: PaletteSwatch? {
         document.palette.first { $0.id == selectedSwatchID }
+    }
+
+    var palettes: [PatternPalette] {
+        let storedPalettes = PatternPalette.builtInPalettes + customPalettes
+        guard !storedPalettes.contains(where: { $0.id == document.paletteID }) else {
+            return storedPalettes
+        }
+
+        return storedPalettes + [selectedPalette]
+    }
+
+    var selectedPalette: PatternPalette {
+        PatternPalette(
+            id: document.paletteID,
+            name: document.paletteName,
+            swatches: document.palette
+        )
+    }
+
+    var canDeleteSelectedPalette: Bool {
+        customPalettes.contains { $0.id == document.paletteID }
     }
 
     var documentURL: URL {
@@ -92,6 +126,11 @@ final class PatternStore: ObservableObject {
 
     func updateTechnique(_ technique: PatternTechnique) {
         document.technique = technique
+        touch()
+    }
+
+    func updateGridBlockSize(_ gridBlockSize: Int) {
+        document.gridBlockSize = PatternDocument.normalizedGridBlockSize(gridBlockSize)
         touch()
     }
 
@@ -173,6 +212,8 @@ final class PatternStore: ObservableObject {
                 selectedSwatchID = swatchID
                 tool = .paint
             }
+        case .replaceColor:
+            statusMessage = "Velg farger i verktøypanelet"
         }
     }
 
@@ -181,12 +222,18 @@ final class PatternStore: ObservableObject {
     }
 
     func copySelection() {
-        guard let bounds = selection.bounds else { return }
-        clipboard = selection.reduce(into: [:]) { partialResult, coordinate in
-            guard let swatchID = document.cells[coordinate] else { return }
-            partialResult[GridCoordinate(x: coordinate.x - bounds.minX, y: coordinate.y - bounds.minY)] = swatchID
-        }
+        clipboard = clipboardSnapshotForSelection()
         statusMessage = "Kopierte \(clipboard.count) felt"
+    }
+
+    func cutSelection() {
+        let snapshot = clipboardSnapshotForSelection()
+        guard !snapshot.isEmpty else { return }
+
+        clipboard = snapshot
+        clearCells(in: selection)
+        touch()
+        statusMessage = "Klippet ut \(clipboard.count) felt"
     }
 
     func pasteClipboard() {
@@ -271,6 +318,48 @@ final class PatternStore: ObservableObject {
         statusMessage = "Byttet farge"
     }
 
+    func applyPalette(id: UUID) {
+        guard let palette = palettes.first(where: { $0.id == id }) else { return }
+        document.paletteID = palette.id
+        document.paletteName = palette.name
+        document.palette = PatternPalette.normalizedSwatches(palette.swatches)
+        selectedSwatchID = document.palette.first(where: { $0.id == selectedSwatchID })?.id ?? document.palette.first?.id ?? selectedSwatchID
+        touch()
+        statusMessage = "Palett: \(palette.name)"
+    }
+
+    func saveCustomPalette(name: String, swatches: [PaletteSwatch], replacing paletteID: UUID?) {
+        let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let paletteName = cleanedName.isEmpty ? "Egendefinert palett" : cleanedName
+        let normalizedSwatches = PatternPalette.normalizedSwatches(swatches)
+
+        let palette: PatternPalette
+        if let paletteID, let index = customPalettes.firstIndex(where: { $0.id == paletteID }) {
+            palette = PatternPalette(id: paletteID, name: paletteName, swatches: normalizedSwatches)
+            customPalettes[index] = palette
+        } else {
+            palette = PatternPalette(id: UUID(), name: paletteName, swatches: normalizedSwatches)
+            customPalettes.append(palette)
+        }
+
+        persistCustomPalettes()
+        applyPalette(id: palette.id)
+        statusMessage = "Lagret palett: \(palette.name)"
+    }
+
+    func deleteCustomPalette(id: UUID) {
+        guard let index = customPalettes.firstIndex(where: { $0.id == id }) else { return }
+        let deletedName = customPalettes[index].name
+        customPalettes.remove(at: index)
+        persistCustomPalettes()
+
+        if document.paletteID == id {
+            applyPalette(id: PatternPalette.standardID)
+        }
+
+        statusMessage = "Slettet palett: \(deletedName)"
+    }
+
     func croppedPaintedCellCount(width: Int, height: Int) -> Int {
         document.cells.keys.filter { coordinate in
             coordinate.x < 0 || coordinate.x >= width || coordinate.y < 0 || coordinate.y >= height
@@ -319,6 +408,7 @@ final class PatternStore: ObservableObject {
     func load(url: URL) throws {
         let data = try Data(contentsOf: url)
         document = try decoder.decode(PatternDocument.self, from: data)
+        normalizeCurrentPalette()
         selectedSwatchID = document.palette.first?.id ?? selectedSwatchID
         selection.removeAll()
         clipboard.removeAll()
@@ -329,6 +419,7 @@ final class PatternStore: ObservableObject {
 
     func newDocument() {
         document = PatternDocument()
+        normalizeCurrentPalette()
         selectedSwatchID = document.palette.first?.id ?? selectedSwatchID
         selection.removeAll()
         clipboard.removeAll()
@@ -374,6 +465,15 @@ final class PatternStore: ObservableObject {
             if let swatchID = document.cells[coordinate] {
                 partialResult[coordinate] = swatchID
             }
+        }
+    }
+
+    private func clipboardSnapshotForSelection() -> [GridCoordinate: UUID] {
+        guard let bounds = selection.bounds else { return [:] }
+
+        return selection.reduce(into: [:]) { partialResult, coordinate in
+            guard let swatchID = document.cells[coordinate] else { return }
+            partialResult[GridCoordinate(x: coordinate.x - bounds.minX, y: coordinate.y - bounds.minY)] = swatchID
         }
     }
 
@@ -464,5 +564,36 @@ final class PatternStore: ObservableObject {
 
     private var documentsDirectory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+
+    private func normalizeCurrentPalette() {
+        document.palette = PatternPalette.normalizedSwatches(document.palette)
+
+        if document.paletteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document.paletteName = PatternPalette.standardName
+        }
+
+        if !palettes.contains(where: { $0.id == document.paletteID }) && document.paletteID == PatternPalette.standardID {
+            document.paletteName = PatternPalette.standardName
+        }
+    }
+
+    private func persistCustomPalettes() {
+        do {
+            let data = try encoder.encode(customPalettes)
+            UserDefaults.standard.set(data, forKey: customPalettesKey)
+        } catch {
+            statusMessage = "Kunne ikke lagre paletter: \(error.localizedDescription)"
+        }
+    }
+
+    private static func loadCustomPalettes(key: String) -> [PatternPalette] {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return [] }
+        let decoder = JSONDecoder()
+        guard let palettes = try? decoder.decode([PatternPalette].self, from: data) else { return [] }
+
+        return palettes
+            .filter { !$0.isBuiltIn }
+            .map { PatternPalette(id: $0.id, name: $0.name, swatches: PatternPalette.normalizedSwatches($0.swatches)) }
     }
 }

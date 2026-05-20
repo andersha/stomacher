@@ -23,6 +23,9 @@ struct PatternDocument: Codable, Identifiable {
     var technique: PatternTechnique
     var width: Int
     var height: Int
+    var gridBlockSize: Int
+    var paletteID: UUID
+    var paletteName: String
     var palette: [PaletteSwatch]
     var cells: [GridCoordinate: UUID]
     var outlineCells: Set<GridCoordinate>
@@ -35,6 +38,9 @@ struct PatternDocument: Codable, Identifiable {
         case technique
         case width
         case height
+        case gridBlockSize
+        case paletteID
+        case paletteName
         case palette
         case cells
         case outlineCells
@@ -48,6 +54,9 @@ struct PatternDocument: Codable, Identifiable {
         technique: PatternTechnique = .beads,
         width: Int = 180,
         height: Int = 120,
+        gridBlockSize: Int = 10,
+        paletteID: UUID = PatternPalette.standardID,
+        paletteName: String = PatternPalette.standardName,
         palette: [PaletteSwatch] = PaletteSwatch.defaultPalette,
         cells: [GridCoordinate: UUID] = [:],
         outlineCells: Set<GridCoordinate> = [],
@@ -59,6 +68,9 @@ struct PatternDocument: Codable, Identifiable {
         self.technique = technique
         self.width = width
         self.height = height
+        self.gridBlockSize = Self.normalizedGridBlockSize(gridBlockSize)
+        self.paletteID = paletteID
+        self.paletteName = paletteName
         self.palette = palette
         self.cells = cells
         self.outlineCells = outlineCells
@@ -73,6 +85,9 @@ struct PatternDocument: Codable, Identifiable {
         technique = try container.decode(PatternTechnique.self, forKey: .technique)
         width = try container.decode(Int.self, forKey: .width)
         height = try container.decode(Int.self, forKey: .height)
+        gridBlockSize = Self.normalizedGridBlockSize(try container.decodeIfPresent(Int.self, forKey: .gridBlockSize) ?? 10)
+        paletteID = try container.decodeIfPresent(UUID.self, forKey: .paletteID) ?? PatternPalette.standardID
+        paletteName = try container.decodeIfPresent(String.self, forKey: .paletteName) ?? PatternPalette.standardName
         palette = try container.decode([PaletteSwatch].self, forKey: .palette)
         cells = try container.decode([GridCoordinate: UUID].self, forKey: .cells)
         outlineCells = try container.decodeIfPresent(Set<GridCoordinate>.self, forKey: .outlineCells) ?? []
@@ -87,6 +102,9 @@ struct PatternDocument: Codable, Identifiable {
         try container.encode(technique, forKey: .technique)
         try container.encode(width, forKey: .width)
         try container.encode(height, forKey: .height)
+        try container.encode(gridBlockSize, forKey: .gridBlockSize)
+        try container.encode(paletteID, forKey: .paletteID)
+        try container.encode(paletteName, forKey: .paletteName)
         try container.encode(palette, forKey: .palette)
         try container.encode(cells, forKey: .cells)
         try container.encode(outlineCells, forKey: .outlineCells)
@@ -137,6 +155,10 @@ struct PatternDocument: Codable, Identifiable {
 
     func swatch(for id: UUID) -> PaletteSwatch? {
         palette.first { $0.id == id }
+    }
+
+    static func normalizedGridBlockSize(_ value: Int) -> Int {
+        min(20, max(2, value))
     }
 
     private func outsideOutlineCells() -> Set<GridCoordinate> {

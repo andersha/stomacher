@@ -82,12 +82,12 @@ struct PatternCanvasView: View {
         context.stroke(minor, with: .color(minorGridColor), lineWidth: 0.6)
 
         var major = Path()
-        for x in stride(from: 0, through: store.document.width, by: 10) {
+        for x in stride(from: 0, through: store.document.width, by: store.document.gridBlockSize) {
             let px = CGFloat(x) * cellSize
             major.move(to: CGPoint(x: px, y: 0))
             major.addLine(to: CGPoint(x: px, y: canvasSize.height))
         }
-        for y in stride(from: 0, through: store.document.height, by: 10) {
+        for y in stride(from: 0, through: store.document.height, by: store.document.gridBlockSize) {
             let py = CGFloat(y) * cellSize
             major.move(to: CGPoint(x: 0, y: py))
             major.addLine(to: CGPoint(x: canvasSize.width, y: py))

@@ -5,8 +5,10 @@ SwiftUI-prototype for å tegne bringeduk-mønstre på et vanlig rutenett.
 ## Funksjoner
 
 - Stor scroll- og zoom-bar arbeidsflate på 180 x 120 ruter.
+- Justerbar rutenettblokk for markerte hjelpelinjer.
 - Teknikkvalg for perler og masker.
 - Fargepalett med symboler for utskrift.
+- Velg standardpaletten eller lag egne paletter med fargekart og RGB/HSL/CMYK/HSV-koder.
 - Flytt, tegn, visk, marker og pipette.
 - Egen ytterkant for mønsteret; uten ytterkant brukes hele rutenettet.
 - Marker med rektangel som standard, eller bytt til enkeltruter.

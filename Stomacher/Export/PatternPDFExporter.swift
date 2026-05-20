@@ -208,7 +208,15 @@ struct PatternPDFExporter {
             }
         }
 
-        drawGrid(rect: CGRect(x: origin.x, y: origin.y, width: CGFloat(visibleWidth) * cellSize, height: CGFloat(visibleHeight) * cellSize), cellSize: cellSize, columns: visibleWidth, rows: visibleHeight)
+        drawGrid(
+            rect: CGRect(x: origin.x, y: origin.y, width: CGFloat(visibleWidth) * cellSize, height: CGFloat(visibleHeight) * cellSize),
+            cellSize: cellSize,
+            columns: visibleWidth,
+            rows: visibleHeight,
+            startX: startX,
+            startY: startY,
+            majorEvery: document.gridBlockSize
+        )
         drawOutline(document: document, origin: origin, startX: startX, startY: startY, visibleWidth: visibleWidth, visibleHeight: visibleHeight, cellSize: cellSize)
 
         let footer = "Kolonner \(startX)-\(endX - 1), rader \(startY)-\(endY - 1)"
@@ -250,7 +258,7 @@ struct PatternPDFExporter {
         }
     }
 
-    private func drawGrid(rect: CGRect, cellSize: CGFloat, columns: Int, rows: Int) {
+    private func drawGrid(rect: CGRect, cellSize: CGFloat, columns: Int, rows: Int, startX: Int, startY: Int, majorEvery: Int) {
         let gridPath = UIBezierPath()
         for x in 0...columns {
             let px = rect.minX + CGFloat(x) * cellSize
@@ -267,12 +275,12 @@ struct PatternPDFExporter {
         gridPath.stroke()
 
         let majorPath = UIBezierPath()
-        for x in stride(from: 0, through: columns, by: 10) {
+        for x in 0...columns where (startX + x).isMultiple(of: majorEvery) {
             let px = rect.minX + CGFloat(x) * cellSize
             majorPath.move(to: CGPoint(x: px, y: rect.minY))
             majorPath.addLine(to: CGPoint(x: px, y: rect.maxY))
         }
-        for y in stride(from: 0, through: rows, by: 10) {
+        for y in 0...rows where (startY + y).isMultiple(of: majorEvery) {
             let py = rect.minY + CGFloat(y) * cellSize
             majorPath.move(to: CGPoint(x: rect.minX, y: py))
             majorPath.addLine(to: CGPoint(x: rect.maxX, y: py))
