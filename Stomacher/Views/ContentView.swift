@@ -480,7 +480,13 @@ private struct PaletteEditorView: View {
     @State private var paletteName: String
     @State private var draftSwatches: [PaletteSwatch]
     @State private var selectedSwatchID: UUID
-    @State private var spectrumBrightness: Double
+    @State private var workingColor: PaletteColor
+    @State private var hexInput: String
+    @State private var selectedMode: PaletteColorMode = .hsl
+    @State private var dmcSearch = ""
+    @State private var dmcFamily = "Alle"
+    @State private var savedFlash = false
+    @FocusState private var isHexFocused: Bool
     private let sourcePaletteID: UUID
 
     init(store: PatternStore) {
@@ -493,91 +499,85 @@ private struct PaletteEditorView: View {
         _paletteName = State(initialValue: initialName)
         _draftSwatches = State(initialValue: swatches)
         _selectedSwatchID = State(initialValue: swatches.first?.id ?? UUID())
-        _spectrumBrightness = State(initialValue: initialColor.hsv.brightness)
+        _workingColor = State(initialValue: initialColor)
+        _hexInput = State(initialValue: String(initialColor.hex.dropFirst()))
     }
 
     var body: some View {
-        Form {
-            Section("Valgt palett") {
-                LabeledContent("Utgangspunkt", value: store.document.paletteName)
-                TextField("Nytt palettnavn", text: $paletteName)
-                    .textInputAutocapitalization(.words)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                paletteMetadataCard
 
-            Section("Fargekart") {
-                ColorSpectrumPicker(
-                    brightness: $spectrumBrightness,
-                    selectedColor: selectedColor,
-                    onSelect: setSelectedColor
+                PaletteSlotPicker(
+                    swatches: draftSwatches,
+                    selectedID: selectedSwatchID,
+                    workingColor: workingColor,
+                    isDirty: isDirty,
+                    onSelect: selectSwatch
                 )
-            }
 
-            Section("Palettfarger") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 62), spacing: 8)], spacing: 8) {
-                    ForEach(draftSwatches) { swatch in
-                        Button {
-                            selectedSwatchID = swatch.id
-                            if let color = PaletteColor(hex: swatch.hex) {
-                                spectrumBrightness = color.hsv.brightness
-                            }
-                        } label: {
-                            VStack(spacing: 6) {
-                                Circle()
-                                    .fill(swatch.color)
-                                    .overlay(
-                                        Circle()
-                                            .stroke(.primary.opacity(selectedSwatchID == swatch.id ? 0.9 : 0.18), lineWidth: selectedSwatchID == swatch.id ? 3 : 1)
-                                    )
-                                    .frame(width: 34, height: 34)
+                if let selectedSwatch {
+                    PaletteEditorSectionLabel("Redigerer farge \(selectedSwatch.symbol)")
 
-                                Text(swatch.symbol)
-                                    .font(.caption.weight(.semibold))
+                    PaletteColorHero(
+                        swatch: selectedSwatch,
+                        color: workingColor,
+                        hexInput: $hexInput,
+                        isHexFocused: $isHexFocused,
+                        matchedDMC: matchedDMC,
+                        isDirty: isDirty,
+                        savedFlash: savedFlash,
+                        onHexInput: updateColorFromHexInput,
+                        onSave: applyWorkingColorToSlot
+                    )
 
-                                Text(swatch.hex)
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .minimumScaleFactor(0.75)
-                            }
-                            .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            if let colorBinding = selectedColorBinding {
-                Section("Valgt farge") {
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(colorBinding.wrappedValue.color)
-                            .frame(width: 54, height: 54)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(.primary.opacity(0.16)))
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(selectedSwatch?.symbol ?? "")
-                                .font(.headline.monospaced())
-                            Text(colorBinding.wrappedValue.hex)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
+                    Picker("Fargemodell", selection: $selectedMode) {
+                        ForEach(PaletteColorMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
                     }
+                    .pickerStyle(.segmented)
 
-                    ColorCodeFields(color: colorBinding)
+                    if selectedMode == .dmc {
+                        DMCColorPicker(
+                            search: $dmcSearch,
+                            family: $dmcFamily,
+                            selectedHex: workingColor.hex,
+                            onPick: setWorkingColor
+                        )
+                    } else {
+                        PaletteEditorCard {
+                            VStack(spacing: 12) {
+                                ForEach(channels, id: \.id) { channel in
+                                    ColorChannelRow(channel: channel)
+                                }
+                            }
+                        }
+
+                        PaletteEditorSectionLabel("Naboer · finjustering")
+
+                        PaletteEditorCard {
+                            NeighborColorGrid(colors: neighborColors, selectedHex: workingColor.hex) { color in
+                                setWorkingColor(color)
+                            }
+                        }
+                    }
                 }
-            }
 
-            if store.canDeleteSelectedPalette {
-                Section {
+                if store.canDeleteSelectedPalette {
                     Button(role: .destructive) {
                         store.deleteCustomPalette(id: sourcePaletteID)
                         dismiss()
                     } label: {
                         Label("Slett egendefinert palett", systemImage: "trash")
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.bordered)
                 }
             }
+            .padding(18)
         }
+        .background(Color(uiColor: .systemGroupedBackground))
         .navigationTitle("Rediger palett")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -594,266 +594,865 @@ private struct PaletteEditorView: View {
                 .disabled(paletteName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
+        .onChange(of: workingColor) {
+            guard !isHexFocused else { return }
+            hexInput = String(workingColor.hex.dropFirst())
+        }
+    }
+
+    private var paletteMetadataCard: some View {
+        PaletteEditorCard {
+            VStack(alignment: .leading, spacing: 12) {
+                LabeledContent("Utgangspunkt", value: store.document.paletteName)
+                TextField("Nytt palettnavn", text: $paletteName)
+                    .textInputAutocapitalization(.words)
+                    .textFieldStyle(.roundedBorder)
+            }
+        }
     }
 
     private var selectedSwatch: PaletteSwatch? {
         draftSwatches.first { $0.id == selectedSwatchID }
     }
 
-    private var selectedColor: PaletteColor? {
-        guard let selectedSwatch else { return nil }
-        return PaletteColor(hex: selectedSwatch.hex)
+    private var isDirty: Bool {
+        selectedSwatch?.hex.uppercased() != workingColor.hex.uppercased()
     }
 
-    private var selectedColorBinding: Binding<PaletteColor>? {
-        guard draftSwatches.contains(where: { $0.id == selectedSwatchID }) else { return nil }
+    private var matchedDMC: DMCThreadColor? {
+        DMCThreadColor.colors.first { $0.hex.uppercased() == workingColor.hex.uppercased() }
+    }
 
-        return Binding {
-            selectedColor ?? PaletteColor(red: 0, green: 0, blue: 0)
-        } set: { color in
-            setSelectedColor(color)
+    private var channels: [PaletteColorChannel] {
+        PaletteColorChannel.channels(for: selectedMode, color: workingColor, setColor: setWorkingColor)
+    }
+
+    private var neighborColors: [NeighborColor] {
+        let hsl = workingColor.hsl
+        return [
+            NeighborColor(title: "−Tone", color: PaletteColor(hue: shiftedHue(hsl.hue, by: -20), saturation: hsl.saturation, lightness: hsl.lightness)),
+            NeighborColor(title: "−Lyshet", color: PaletteColor(hue: hsl.hue, saturation: hsl.saturation, lightness: max(0, hsl.lightness - 0.12))),
+            NeighborColor(title: "Nå", color: workingColor),
+            NeighborColor(title: "+Lyshet", color: PaletteColor(hue: hsl.hue, saturation: hsl.saturation, lightness: min(1, hsl.lightness + 0.12))),
+            NeighborColor(title: "+Tone", color: PaletteColor(hue: shiftedHue(hsl.hue, by: 20), saturation: hsl.saturation, lightness: hsl.lightness))
+        ]
+    }
+
+    private func selectSwatch(_ swatch: PaletteSwatch) {
+        selectedSwatchID = swatch.id
+        savedFlash = false
+        if let color = PaletteColor(hex: swatch.hex) {
+            setWorkingColor(color)
         }
     }
 
-    private func setSelectedColor(_ color: PaletteColor) {
+    private func setWorkingColor(_ color: PaletteColor) {
+        workingColor = color
+        if !isHexFocused {
+            hexInput = String(color.hex.dropFirst())
+        }
+    }
+
+    private func updateColorFromHexInput(_ value: String) {
+        let filtered = String(value.uppercased().filter(\.isHexadecimalDigit).prefix(6))
+        if filtered != value {
+            hexInput = filtered
+        }
+        guard filtered.count == 6, let color = PaletteColor(hex: filtered) else { return }
+        workingColor = color
+    }
+
+    private func applyWorkingColorToSlot() {
         guard let index = draftSwatches.firstIndex(where: { $0.id == selectedSwatchID }) else { return }
-        draftSwatches[index].hex = color.hex
+        draftSwatches[index].hex = workingColor.hex
+        savedFlash = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            savedFlash = false
+        }
+    }
+
+    private func shiftedHue(_ hue: Double, by degrees: Double) -> Double {
+        let shifted = hue + degrees / 360
+        if shifted < 0 { return shifted + 1 }
+        if shifted > 1 { return shifted - 1 }
+        return shifted
     }
 }
 
-private struct ColorSpectrumPicker: View {
-    @Binding var brightness: Double
-    var selectedColor: PaletteColor?
-    var onSelect: (PaletteColor) -> Void
+private enum PaletteColorMode: String, CaseIterable, Identifiable {
+    case rgb = "RGB"
+    case hsl = "HSL"
+    case hsv = "HSV"
+    case cmyk = "CMYK"
+    case dmc = "DMC"
+
+    var id: String { rawValue }
+}
+
+private struct PaletteEditorCard<Content: View>: View {
+    @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            GeometryReader { proxy in
-                ZStack(alignment: .topLeading) {
-                    Canvas { context, size in
-                        let columns = 48
-                        let rows = 24
-                        let cellWidth = size.width / CGFloat(columns)
-                        let cellHeight = size.height / CGFloat(rows)
+        content
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
 
-                        for row in 0..<rows {
-                            for column in 0..<columns {
-                                let hue = Double(column) / Double(columns - 1)
-                                let saturation = 1 - Double(row) / Double(rows - 1)
-                                let color = PaletteColor(hue: hue, saturation: saturation, brightness: brightness).color
-                                let rect = CGRect(
-                                    x: CGFloat(column) * cellWidth,
-                                    y: CGFloat(row) * cellHeight,
-                                    width: cellWidth + 0.5,
-                                    height: cellHeight + 0.5
-                                )
-                                context.fill(Path(rect), with: .color(color))
+private struct PaletteEditorSectionLabel: View {
+    var title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.headline.weight(.regular))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            .padding(.top, 6)
+    }
+}
+
+private struct PaletteSlotPicker: View {
+    var swatches: [PaletteSwatch]
+    var selectedID: UUID
+    var workingColor: PaletteColor
+    var isDirty: Bool
+    var onSelect: (PaletteSwatch) -> Void
+
+    var body: some View {
+        PaletteEditorCard {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Palettfarger")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Text("Trykk for å redigere")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .fixedSize(horizontal: true, vertical: false)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(swatches) { swatch in
+                            let isSelected = swatch.id == selectedID
+
+                            Button {
+                                onSelect(swatch)
+                            } label: {
+                                VStack(spacing: 4) {
+                                    ZStack(alignment: .bottomTrailing) {
+                                        Circle()
+                                            .fill(swatch.color)
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(.white, lineWidth: isSelected ? 2 : 0)
+                                            )
+                                            .overlay(
+                                                Circle()
+                                                    .stroke(isSelected ? Color.accentColor : .primary.opacity(0.12), lineWidth: isSelected ? 2.5 : 1)
+                                            )
+                                            .frame(width: 30, height: 30)
+
+                                        if isSelected && isDirty {
+                                            Circle()
+                                                .fill(workingColor.color)
+                                                .overlay(Circle().stroke(.white, lineWidth: 2))
+                                                .overlay(Circle().stroke(.black.opacity(0.16), lineWidth: 1))
+                                                .frame(width: 13, height: 13)
+                                                .offset(x: 3, y: 3)
+                                        }
+                                    }
+
+                                    Text(swatch.symbol)
+                                        .font(.caption2.weight(isSelected ? .bold : .medium))
+                                        .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                                }
+                                .frame(width: 38)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Rediger farge \(swatch.symbol)")
+                        }
+                    }
+                    .padding(.vertical, 1)
+                }
+            }
+        }
+    }
+}
+
+private struct PaletteColorHero: View {
+    var swatch: PaletteSwatch
+    var color: PaletteColor
+    @Binding var hexInput: String
+    var isHexFocused: FocusState<Bool>.Binding
+    var matchedDMC: DMCThreadColor?
+    var isDirty: Bool
+    var savedFlash: Bool
+    var onHexInput: (String) -> Void
+    var onSave: () -> Void
+
+    private var heroForeground: Color {
+        color.prefersDarkForeground ? .black : .white
+    }
+
+    private var chipBackground: Color {
+        color.prefersDarkForeground ? .black.opacity(0.10) : .white.opacity(0.22)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 8) {
+                        Text("Farge \(swatch.symbol)")
+                            .font(.caption2.weight(.bold))
+                            .textCase(.uppercase)
+                            .tracking(1.2)
+                            .foregroundStyle(heroForeground.opacity(0.62))
+
+                        if let matchedDMC {
+                            heroChip("DMC \(matchedDMC.num) · \(matchedDMC.name)")
+                        }
+
+                        if isDirty {
+                            heroChip("Ulagrede endringer")
+                        }
+                    }
+
+                    HStack(alignment: .firstTextBaseline, spacing: 2) {
+                        Text("#")
+                            .opacity(0.5)
+
+                        TextField("HEX", text: $hexInput)
+                            .focused(isHexFocused)
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                            .keyboardType(.asciiCapable)
+                            .onChange(of: hexInput) { _, newValue in
+                                onHexInput(newValue)
+                            }
+                            .submitLabel(.done)
+                            .frame(width: 172, alignment: .leading)
+                    }
+                    .font(.system(size: 42, weight: .bold, design: .monospaced))
+                    .foregroundStyle(heroForeground)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                }
+
+                Spacer(minLength: 8)
+
+                Button(action: onSave) {
+                    Label(savedFlash ? "Lagret i \(swatch.symbol)" : "Lagre i \(swatch.symbol)", systemImage: savedFlash ? "checkmark" : "square.and.arrow.down")
+                        .font(.subheadline.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                        .padding(.horizontal, 14)
+                        .frame(height: 44)
+                        .foregroundStyle(saveForeground)
+                        .background(saveBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .opacity(isDirty || savedFlash ? 1 : 0.55)
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 9) {
+                colorMetric("RGB", "\(color.rgb255.red)·\(color.rgb255.green)·\(color.rgb255.blue)")
+                divider
+                colorMetric("HSL", "\(rounded(color.hsl.hue * 360))°·\(rounded(color.hsl.saturation * 100))·\(rounded(color.hsl.lightness * 100))")
+                divider
+                colorMetric("HSV", "\(rounded(color.hsv.hue * 360))°·\(rounded(color.hsv.saturation * 100))·\(rounded(color.hsv.brightness * 100))")
+                divider
+                colorMetric("CMYK", "\(rounded(color.cmyk.cyan * 100))·\(rounded(color.cmyk.magenta * 100))·\(rounded(color.cmyk.yellow * 100))·\(rounded(color.cmyk.black * 100))")
+            }
+            .font(.caption2.monospaced())
+            .foregroundStyle(heroForeground.opacity(0.72))
+            .lineLimit(1)
+            .minimumScaleFactor(0.62)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .leading)
+        .background(color.color, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.black.opacity(0.06)))
+    }
+
+    private var saveBackground: Color {
+        if savedFlash { return .green }
+        return color.prefersDarkForeground ? .black : .white
+    }
+
+    private var saveForeground: Color {
+        if savedFlash { return .white }
+        return color.prefersDarkForeground ? .white : .black
+    }
+
+    private var divider: some View {
+        Text("|")
+            .opacity(0.35)
+    }
+
+    private func heroChip(_ title: String) -> some View {
+        Text(title)
+            .font(.caption2.weight(.bold))
+            .tracking(0.2)
+            .foregroundStyle(heroForeground.opacity(0.86))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(chipBackground, in: Capsule())
+    }
+
+    private func colorMetric(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .fontWeight(.bold)
+                .opacity(0.58)
+            Text(value)
+        }
+    }
+
+    private func rounded(_ value: Double) -> Int {
+        Int(value.rounded())
+    }
+}
+
+private struct PaletteColorChannel {
+    let id: String
+    let key: String
+    let title: String
+    let value: Int
+    let maxValue: Int
+    let unit: String
+    let gradient: [Color]
+    let setValue: (Int) -> Void
+
+    static func channels(for mode: PaletteColorMode, color: PaletteColor, setColor: @escaping (PaletteColor) -> Void) -> [PaletteColorChannel] {
+        let rgb = color.rgb255
+        let hsl = color.hsl
+        let hsv = color.hsv
+        let cmyk = color.cmyk
+
+        func gradient(_ build: (Double) -> PaletteColor) -> [Color] {
+            (0...6).map { step in
+                build(Double(step) / 6).color
+            }
+        }
+
+        switch mode {
+        case .rgb:
+            return [
+                PaletteColorChannel(id: "rgb-r", key: "R", title: "Rød", value: rgb.red, maxValue: 255, unit: "", gradient: gradient { PaletteColor(red: $0, green: color.green, blue: color.blue) }, setValue: { setColor(PaletteColor(red: Double($0) / 255, green: color.green, blue: color.blue)) }),
+                PaletteColorChannel(id: "rgb-g", key: "G", title: "Grønn", value: rgb.green, maxValue: 255, unit: "", gradient: gradient { PaletteColor(red: color.red, green: $0, blue: color.blue) }, setValue: { setColor(PaletteColor(red: color.red, green: Double($0) / 255, blue: color.blue)) }),
+                PaletteColorChannel(id: "rgb-b", key: "B", title: "Blå", value: rgb.blue, maxValue: 255, unit: "", gradient: gradient { PaletteColor(red: color.red, green: color.green, blue: $0) }, setValue: { setColor(PaletteColor(red: color.red, green: color.green, blue: Double($0) / 255)) })
+            ]
+        case .hsl:
+            return [
+                PaletteColorChannel(id: "hsl-h", key: "H", title: "Tone", value: Int((hsl.hue * 360).rounded()), maxValue: 360, unit: "°", gradient: gradient { PaletteColor(hue: $0, saturation: hsl.saturation, lightness: hsl.lightness) }, setValue: { setColor(PaletteColor(hue: Double($0) / 360, saturation: hsl.saturation, lightness: hsl.lightness)) }),
+                PaletteColorChannel(id: "hsl-s", key: "S", title: "Metning", value: Int((hsl.saturation * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(hue: hsl.hue, saturation: $0, lightness: hsl.lightness) }, setValue: { setColor(PaletteColor(hue: hsl.hue, saturation: Double($0) / 100, lightness: hsl.lightness)) }),
+                PaletteColorChannel(id: "hsl-l", key: "L", title: "Lyshet", value: Int((hsl.lightness * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(hue: hsl.hue, saturation: hsl.saturation, lightness: $0) }, setValue: { setColor(PaletteColor(hue: hsl.hue, saturation: hsl.saturation, lightness: Double($0) / 100)) })
+            ]
+        case .hsv:
+            return [
+                PaletteColorChannel(id: "hsv-h", key: "H", title: "Tone", value: Int((hsv.hue * 360).rounded()), maxValue: 360, unit: "°", gradient: gradient { PaletteColor(hue: $0, saturation: hsv.saturation, brightness: hsv.brightness) }, setValue: { setColor(PaletteColor(hue: Double($0) / 360, saturation: hsv.saturation, brightness: hsv.brightness)) }),
+                PaletteColorChannel(id: "hsv-s", key: "S", title: "Metning", value: Int((hsv.saturation * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(hue: hsv.hue, saturation: $0, brightness: hsv.brightness) }, setValue: { setColor(PaletteColor(hue: hsv.hue, saturation: Double($0) / 100, brightness: hsv.brightness)) }),
+                PaletteColorChannel(id: "hsv-v", key: "V", title: "Lysverdi", value: Int((hsv.brightness * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(hue: hsv.hue, saturation: hsv.saturation, brightness: $0) }, setValue: { setColor(PaletteColor(hue: hsv.hue, saturation: hsv.saturation, brightness: Double($0) / 100)) })
+            ]
+        case .cmyk:
+            return [
+                PaletteColorChannel(id: "cmyk-c", key: "C", title: "Cyan", value: Int((cmyk.cyan * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(cyan: $0, magenta: cmyk.magenta, yellow: cmyk.yellow, black: cmyk.black) }, setValue: { setColor(PaletteColor(cyan: Double($0) / 100, magenta: cmyk.magenta, yellow: cmyk.yellow, black: cmyk.black)) }),
+                PaletteColorChannel(id: "cmyk-m", key: "M", title: "Magenta", value: Int((cmyk.magenta * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(cyan: cmyk.cyan, magenta: $0, yellow: cmyk.yellow, black: cmyk.black) }, setValue: { setColor(PaletteColor(cyan: cmyk.cyan, magenta: Double($0) / 100, yellow: cmyk.yellow, black: cmyk.black)) }),
+                PaletteColorChannel(id: "cmyk-y", key: "Y", title: "Gul", value: Int((cmyk.yellow * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(cyan: cmyk.cyan, magenta: cmyk.magenta, yellow: $0, black: cmyk.black) }, setValue: { setColor(PaletteColor(cyan: cmyk.cyan, magenta: cmyk.magenta, yellow: Double($0) / 100, black: cmyk.black)) }),
+                PaletteColorChannel(id: "cmyk-k", key: "K", title: "Sort", value: Int((cmyk.black * 100).rounded()), maxValue: 100, unit: "%", gradient: gradient { PaletteColor(cyan: cmyk.cyan, magenta: cmyk.magenta, yellow: cmyk.yellow, black: $0) }, setValue: { setColor(PaletteColor(cyan: cmyk.cyan, magenta: cmyk.magenta, yellow: cmyk.yellow, black: Double($0) / 100)) })
+            ]
+        case .dmc:
+            return []
+        }
+    }
+}
+
+private struct ColorChannelRow: View {
+    var channel: PaletteColorChannel
+
+    var body: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(channel.key)
+                    .font(.caption2.weight(.bold))
+                    .tracking(0.4)
+                    .foregroundStyle(.tertiary)
+                Text(channel.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 76, alignment: .leading)
+
+            GradientChannelSlider(channel: channel)
+
+            ChannelNumberStepper(channel: channel)
+        }
+    }
+}
+
+private struct GradientChannelSlider: View {
+    var channel: PaletteColorChannel
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                LinearGradient(colors: channel.gradient, startPoint: .leading, endPoint: .trailing)
+                    .clipShape(Capsule())
+                    .overlay(Capsule().stroke(.black.opacity(0.06)))
+
+                Circle()
+                    .fill(.white)
+                    .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
+                    .overlay(Circle().stroke(.black.opacity(0.06), lineWidth: 0.5))
+                    .frame(width: 26, height: 30)
+                    .offset(x: knobX(width: proxy.size.width))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let percentage = (value.location.x / max(proxy.size.width, 1)).clamped(to: 0...1)
+                        channel.setValue(Int((Double(percentage) * Double(channel.maxValue)).rounded()))
+                    }
+            )
+        }
+        .frame(height: 30)
+    }
+
+    private func knobX(width: CGFloat) -> CGFloat {
+        let percentage = CGFloat(channel.value) / CGFloat(max(channel.maxValue, 1))
+        return (percentage * width - 13).clamped(to: -2...(width - 24))
+    }
+}
+
+private struct ChannelNumberStepper: View {
+    var channel: PaletteColorChannel
+    @State private var text = ""
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button {
+                channel.setValue(max(0, channel.value - 1))
+            } label: {
+                Image(systemName: "minus")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 28, height: 32)
+            }
+
+            TextField("", text: $text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.center)
+                .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                .frame(width: 40)
+                .onChange(of: text) { _, newValue in
+                    let filtered = String(newValue.filter(\.isNumber).prefix(3))
+                    if filtered != newValue {
+                        text = filtered
+                    }
+                    guard let value = Int(filtered) else { return }
+                    channel.setValue(value.clamped(to: 0...channel.maxValue))
+                }
+
+            Text(channel.unit)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: 12, alignment: .leading)
+
+            Button {
+                channel.setValue(min(channel.maxValue, channel.value + 1))
+            } label: {
+                Image(systemName: "plus")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 28, height: 32)
+            }
+        }
+        .foregroundStyle(Color.accentColor)
+        .frame(width: 116, height: 36)
+        .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onAppear {
+            text = "\(channel.value)"
+        }
+        .onChange(of: channel.value) {
+            text = "\(channel.value)"
+        }
+    }
+}
+
+private struct NeighborColor: Identifiable {
+    let id = UUID()
+    var title: String
+    var color: PaletteColor
+}
+
+private struct NeighborColorGrid: View {
+    var colors: [NeighborColor]
+    var selectedHex: String
+    var onPick: (PaletteColor) -> Void
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 5)
+
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(colors) { item in
+                let isSelected = item.color.hex.uppercased() == selectedHex.uppercased()
+
+                Button {
+                    onPick(item.color)
+                } label: {
+                    VStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(item.color.color)
+                            .aspectRatio(1, contentMode: .fit)
+                            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.black.opacity(0.08)))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2.5)
+                            )
+
+                        Text(item.title)
+                            .font(.caption2.weight(isSelected ? .semibold : .medium))
+                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+
+                        Text(String(item.color.hex.dropFirst()))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+private struct DMCColorPicker: View {
+    @Binding var search: String
+    @Binding var family: String
+    var selectedHex: String
+    var onPick: (PaletteColor) -> Void
+
+    private var filteredColors: [DMCThreadColor] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return DMCThreadColor.colors.filter { color in
+            guard family == "Alle" || color.family == family else { return false }
+            guard !query.isEmpty else { return true }
+            return color.num.lowercased().contains(query)
+                || color.name.lowercased().contains(query)
+                || color.family.lowercased().contains(query)
+        }
+    }
+
+    private var groupedColors: [(family: String, colors: [DMCThreadColor])] {
+        DMCThreadColor.families.compactMap { familyName in
+            guard familyName != "Alle" else { return nil }
+            let colors = filteredColors.filter { $0.family == familyName }
+            return colors.isEmpty ? nil : (familyName, colors)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.tertiary)
+                TextField("Søk etter DMC-nummer eller navn", text: $search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 44)
+            .background(Color(uiColor: .secondarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(DMCThreadColor.families, id: \.self) { familyName in
+                        let isSelected = familyName == family
+
+                        Button {
+                            family = familyName
+                        } label: {
+                            HStack(spacing: 6) {
+                                if let dot = DMCThreadColor.familyDot(familyName) {
+                                    Circle()
+                                        .fill(dot)
+                                        .overlay(Circle().stroke(.black.opacity(0.08)))
+                                        .frame(width: 10, height: 10)
+                                }
+
+                                Text(familyName)
+                                    .font(.caption.weight(.medium))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                            .background(isSelected ? Color.primary : Color(uiColor: .secondarySystemFill), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            HStack {
+                Text("\(filteredColors.count) av \(DMCThreadColor.colors.count) farger")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+
+                Spacer()
+
+                if !search.isEmpty || family != "Alle" {
+                    Button("Nullstill") {
+                        search = ""
+                        family = "Alle"
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            PaletteEditorCard {
+                if groupedColors.isEmpty {
+                    Text("Ingen farger matcher søket.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 90)
+                } else {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(groupedColors, id: \.family) { group in
+                            VStack(alignment: .leading, spacing: 8) {
+                                if family == "Alle" {
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(DMCThreadColor.familyDot(group.family) ?? .gray)
+                                            .overlay(Circle().stroke(.black.opacity(0.08)))
+                                            .frame(width: 8, height: 8)
+                                        Text("\(group.family) · \(group.colors.count)")
+                                            .font(.caption2.weight(.bold))
+                                            .textCase(.uppercase)
+                                            .tracking(0.6)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 48), spacing: 8)], spacing: 10) {
+                                    ForEach(group.colors) { threadColor in
+                                        DMCSwatchButton(
+                                            threadColor: threadColor,
+                                            isSelected: threadColor.hex.uppercased() == selectedHex.uppercased(),
+                                            onPick: onPick
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.primary.opacity(0.12)))
-
-                    if let selectedColor {
-                        let hsv = selectedColor.hsv
-                        Circle()
-                            .stroke(.white, lineWidth: 3)
-                            .overlay(Circle().stroke(.black.opacity(0.62), lineWidth: 1))
-                            .frame(width: 18, height: 18)
-                            .offset(
-                                x: max(0, min(proxy.size.width - 18, CGFloat(hsv.hue) * proxy.size.width - 9)),
-                                y: max(0, min(proxy.size.height - 18, CGFloat(1 - hsv.saturation) * proxy.size.height - 9))
-                            )
-                    }
                 }
-                .contentShape(Rectangle())
-                .gesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            selectColor(at: value.location, size: proxy.size)
-                        }
-                )
-            }
-            .frame(height: 220)
-
-            LabeledContent {
-                Slider(value: $brightness, in: 0...1)
-            } label: {
-                Text("Lysstyrke")
             }
         }
-        .onChange(of: brightness) {
-            guard let selectedColor else { return }
-            let hsv = selectedColor.hsv
-            onSelect(PaletteColor(hue: hsv.hue, saturation: hsv.saturation, brightness: brightness))
-        }
-    }
-
-    private func selectColor(at location: CGPoint, size: CGSize) {
-        guard size.width > 0, size.height > 0 else { return }
-        let hue = Double((location.x / size.width).clamped(to: 0...1))
-        let saturation = Double((1 - location.y / size.height).clamped(to: 0...1))
-        onSelect(PaletteColor(hue: hue, saturation: saturation, brightness: brightness))
+        .padding(.top, 2)
     }
 }
 
-private struct ColorCodeFields: View {
-    @Binding var color: PaletteColor
-    @State private var rgbRed = ""
-    @State private var rgbGreen = ""
-    @State private var rgbBlue = ""
-    @State private var hslHue = ""
-    @State private var hslSaturation = ""
-    @State private var hslLightness = ""
-    @State private var cmykCyan = ""
-    @State private var cmykMagenta = ""
-    @State private var cmykYellow = ""
-    @State private var cmykBlack = ""
-    @State private var hsvHue = ""
-    @State private var hsvSaturation = ""
-    @State private var hsvBrightness = ""
+private struct DMCSwatchButton: View {
+    var threadColor: DMCThreadColor
+    var isSelected: Bool
+    var onPick: (PaletteColor) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            colorRow(title: "RGB", values: [
-                ("R", $rgbRed),
-                ("G", $rgbGreen),
-                ("B", $rgbBlue)
-            ], action: applyRGB)
-
-            colorRow(title: "HSL", values: [
-                ("H", $hslHue),
-                ("S", $hslSaturation),
-                ("L", $hslLightness)
-            ], suffix: "%", action: applyHSL)
-
-            colorRow(title: "CMYK", values: [
-                ("C", $cmykCyan),
-                ("M", $cmykMagenta),
-                ("Y", $cmykYellow),
-                ("K", $cmykBlack)
-            ], suffix: "%", action: applyCMYK)
-
-            colorRow(title: "HSV", values: [
-                ("H", $hsvHue),
-                ("S", $hsvSaturation),
-                ("V", $hsvBrightness)
-            ], suffix: "%", action: applyHSV)
-        }
-        .onAppear(perform: syncFields)
-        .onChange(of: color) {
-            syncFields()
-        }
-    }
-
-    private func colorRow(
-        title: String,
-        values: [(String, Binding<String>)],
-        suffix: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 6) {
-                ForEach(values, id: \.0) { label, value in
-                    HStack(spacing: 3) {
-                        Text(label)
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                        TextField(label, text: value)
-                            .keyboardType(.numbersAndPunctuation)
-                            .multilineTextAlignment(.trailing)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(minWidth: 48, maxWidth: 64)
-                            .onSubmit(action)
-                        if let suffix {
-                            Text(suffix)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+        Button {
+            if let color = PaletteColor(hex: threadColor.hex) {
+                onPick(color)
+            }
+        } label: {
+            VStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(threadColor.color)
+                    .aspectRatio(1, contentMode: .fit)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(.black.opacity(0.08)))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 2.5)
+                    )
+                    .overlay {
+                        if isSelected {
+                            Circle()
+                                .fill(.white)
+                                .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+                                .overlay(Image(systemName: "checkmark").font(.caption2.weight(.bold)).foregroundStyle(Color.accentColor))
+                                .frame(width: 22, height: 22)
                         }
                     }
-                }
 
-                Button("Bruk", action: action)
-                    .buttonStyle(.bordered)
+                Text(threadColor.num)
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("DMC \(threadColor.num), \(threadColor.name)")
+    }
+}
+
+private struct DMCThreadColor: Identifiable, Equatable {
+    var num: String
+    var name: String
+    var hex: String
+    var family: String
+
+    var id: String { num }
+    var color: Color { PaletteColor(hex: hex)?.color ?? .black }
+
+    static let families = ["Alle", "Hvit", "Rød", "Rosa", "Oransje", "Gul", "Grønn", "Blå", "Lilla", "Brun", "Grå"]
+
+    static func familyDot(_ family: String) -> Color? {
+        switch family {
+        case "Hvit": .white
+        case "Rød": Color(hex: "#C8102E")
+        case "Rosa": Color(hex: "#EBA1B5")
+        case "Oransje": Color(hex: "#F58227")
+        case "Gul": Color(hex: "#FFCB58")
+        case "Grønn": Color(hex: "#1E8B4E")
+        case "Blå": Color(hex: "#2A66AC")
+        case "Lilla": Color(hex: "#75517B")
+        case "Brun": Color(hex: "#80532A")
+        case "Grå": Color(hex: "#6E7172")
+        default: nil
         }
     }
 
-    private func applyRGB() {
-        guard
-            let red = parse(rgbRed),
-            let green = parse(rgbGreen),
-            let blue = parse(rgbBlue)
-        else { return }
-
-        color = PaletteColor(red: red / 255, green: green / 255, blue: blue / 255)
-        syncFields()
-    }
-
-    private func applyHSL() {
-        guard
-            let hue = parse(hslHue),
-            let saturation = parse(hslSaturation),
-            let lightness = parse(hslLightness)
-        else { return }
-
-        color = PaletteColor(hue: hue / 360, saturation: saturation / 100, lightness: lightness / 100)
-        syncFields()
-    }
-
-    private func applyCMYK() {
-        guard
-            let cyan = parse(cmykCyan),
-            let magenta = parse(cmykMagenta),
-            let yellow = parse(cmykYellow),
-            let black = parse(cmykBlack)
-        else { return }
-
-        color = PaletteColor(cyan: cyan / 100, magenta: magenta / 100, yellow: yellow / 100, black: black / 100)
-        syncFields()
-    }
-
-    private func applyHSV() {
-        guard
-            let hue = parse(hsvHue),
-            let saturation = parse(hsvSaturation),
-            let brightness = parse(hsvBrightness)
-        else { return }
-
-        color = PaletteColor(hue: hue / 360, saturation: saturation / 100, brightness: brightness / 100)
-        syncFields()
-    }
-
-    private func syncFields() {
-        let rgb = color.rgb255
-        rgbRed = "\(rgb.red)"
-        rgbGreen = "\(rgb.green)"
-        rgbBlue = "\(rgb.blue)"
-
-        let hsl = color.hsl
-        hslHue = "\(Int((hsl.hue * 360).rounded()))"
-        hslSaturation = "\(Int((hsl.saturation * 100).rounded()))"
-        hslLightness = "\(Int((hsl.lightness * 100).rounded()))"
-
-        let cmyk = color.cmyk
-        cmykCyan = "\(Int((cmyk.cyan * 100).rounded()))"
-        cmykMagenta = "\(Int((cmyk.magenta * 100).rounded()))"
-        cmykYellow = "\(Int((cmyk.yellow * 100).rounded()))"
-        cmykBlack = "\(Int((cmyk.black * 100).rounded()))"
-
-        let hsv = color.hsv
-        hsvHue = "\(Int((hsv.hue * 360).rounded()))"
-        hsvSaturation = "\(Int((hsv.saturation * 100).rounded()))"
-        hsvBrightness = "\(Int((hsv.brightness * 100).rounded()))"
-    }
-
-    private func parse(_ value: String) -> Double? {
-        Double(value.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines))
-    }
+    static let colors: [DMCThreadColor] = [
+        DMCThreadColor(num: "Blanc", name: "Hvit", hex: "#FFFFFF", family: "Hvit"),
+        DMCThreadColor(num: "B5200", name: "Snøhvit", hex: "#FAFAFA", family: "Hvit"),
+        DMCThreadColor(num: "Ecru", name: "Ecru", hex: "#F0EAD6", family: "Hvit"),
+        DMCThreadColor(num: "712", name: "Krem", hex: "#F4ECC2", family: "Hvit"),
+        DMCThreadColor(num: "739", name: "Tan ultralys", hex: "#EBD3A5", family: "Hvit"),
+        DMCThreadColor(num: "3865", name: "Vinterhvit", hex: "#F1ECDD", family: "Hvit"),
+        DMCThreadColor(num: "666", name: "Julerød lys", hex: "#E2231A", family: "Rød"),
+        DMCThreadColor(num: "321", name: "Rød", hex: "#C8102E", family: "Rød"),
+        DMCThreadColor(num: "304", name: "Rød medium", hex: "#B5172E", family: "Rød"),
+        DMCThreadColor(num: "498", name: "Rød mørk", hex: "#A4111B", family: "Rød"),
+        DMCThreadColor(num: "816", name: "Granat", hex: "#931625", family: "Rød"),
+        DMCThreadColor(num: "815", name: "Granat medium", hex: "#851021", family: "Rød"),
+        DMCThreadColor(num: "814", name: "Granat mørk", hex: "#6E1525", family: "Rød"),
+        DMCThreadColor(num: "347", name: "Laks veldig mørk", hex: "#B22222", family: "Rød"),
+        DMCThreadColor(num: "349", name: "Korall mørk", hex: "#C3413D", family: "Rød"),
+        DMCThreadColor(num: "817", name: "Korallrød", hex: "#B12A2E", family: "Rød"),
+        DMCThreadColor(num: "818", name: "Babyrosa", hex: "#FAD3DA", family: "Rosa"),
+        DMCThreadColor(num: "963", name: "Rosa ultralys", hex: "#F8C8C8", family: "Rosa"),
+        DMCThreadColor(num: "776", name: "Rosa medium", hex: "#ECA3BB", family: "Rosa"),
+        DMCThreadColor(num: "894", name: "Nellik veldig lys", hex: "#F1AAB6", family: "Rosa"),
+        DMCThreadColor(num: "957", name: "Geranium blek", hex: "#F0A5B8", family: "Rosa"),
+        DMCThreadColor(num: "760", name: "Laks", hex: "#D78E92", family: "Rosa"),
+        DMCThreadColor(num: "3326", name: "Rose lys", hex: "#F5A8B7", family: "Rosa"),
+        DMCThreadColor(num: "335", name: "Rose", hex: "#DC7491", family: "Rosa"),
+        DMCThreadColor(num: "602", name: "Tranebær medium", hex: "#D7588E", family: "Rosa"),
+        DMCThreadColor(num: "603", name: "Tranebær", hex: "#DD7BA5", family: "Rosa"),
+        DMCThreadColor(num: "604", name: "Tranebær lys", hex: "#E5A3BC", family: "Rosa"),
+        DMCThreadColor(num: "718", name: "Plomme", hex: "#82235D", family: "Rosa"),
+        DMCThreadColor(num: "3803", name: "Mauve mørk", hex: "#9E486B", family: "Rosa"),
+        DMCThreadColor(num: "722", name: "Krydder lys", hex: "#EE9E5E", family: "Oransje"),
+        DMCThreadColor(num: "721", name: "Krydder medium", hex: "#E07A24", family: "Oransje"),
+        DMCThreadColor(num: "720", name: "Krydder mørk", hex: "#C75B12", family: "Oransje"),
+        DMCThreadColor(num: "742", name: "Tangerin lys", hex: "#FFB853", family: "Oransje"),
+        DMCThreadColor(num: "741", name: "Tangerin medium", hex: "#FF9F40", family: "Oransje"),
+        DMCThreadColor(num: "740", name: "Tangerin", hex: "#F58227", family: "Oransje"),
+        DMCThreadColor(num: "970", name: "Gresskar lys", hex: "#F18233", family: "Oransje"),
+        DMCThreadColor(num: "947", name: "Brent oransje", hex: "#E54E12", family: "Oransje"),
+        DMCThreadColor(num: "946", name: "Brent oransje medium", hex: "#D34416", family: "Oransje"),
+        DMCThreadColor(num: "745", name: "Gul blek lys", hex: "#FCDFA5", family: "Gul"),
+        DMCThreadColor(num: "744", name: "Gul blek", hex: "#FCD771", family: "Gul"),
+        DMCThreadColor(num: "743", name: "Gul medium", hex: "#FFCB58", family: "Gul"),
+        DMCThreadColor(num: "727", name: "Topas veldig lys", hex: "#FCEAA1", family: "Gul"),
+        DMCThreadColor(num: "726", name: "Topas lys", hex: "#FFCF44", family: "Gul"),
+        DMCThreadColor(num: "725", name: "Topas medium", hex: "#FFC831", family: "Gul"),
+        DMCThreadColor(num: "307", name: "Sitron", hex: "#FFE338", family: "Gul"),
+        DMCThreadColor(num: "445", name: "Sitron lys", hex: "#FAEC9A", family: "Gul"),
+        DMCThreadColor(num: "444", name: "Sitron mørk", hex: "#FFC91F", family: "Gul"),
+        DMCThreadColor(num: "973", name: "Kanari klar", hex: "#FFD11A", family: "Gul"),
+        DMCThreadColor(num: "972", name: "Kanari dyp", hex: "#FFAB0F", family: "Gul"),
+        DMCThreadColor(num: "472", name: "Avokado ultralys", hex: "#D2D78A", family: "Grønn"),
+        DMCThreadColor(num: "471", name: "Avokado lys", hex: "#B5BD63", family: "Grønn"),
+        DMCThreadColor(num: "470", name: "Avokado", hex: "#98A442", family: "Grønn"),
+        DMCThreadColor(num: "704", name: "Chartreuse klar", hex: "#99CD43", family: "Grønn"),
+        DMCThreadColor(num: "703", name: "Chartreuse", hex: "#6DC04A", family: "Grønn"),
+        DMCThreadColor(num: "702", name: "Kelly grønn", hex: "#1AA34A", family: "Grønn"),
+        DMCThreadColor(num: "701", name: "Julegrønn lys", hex: "#008F4C", family: "Grønn"),
+        DMCThreadColor(num: "700", name: "Julegrønn klar", hex: "#007D43", family: "Grønn"),
+        DMCThreadColor(num: "699", name: "Grønn", hex: "#006B3C", family: "Grønn"),
+        DMCThreadColor(num: "912", name: "Smaragd lys", hex: "#2EAB5E", family: "Grønn"),
+        DMCThreadColor(num: "911", name: "Smaragd medium", hex: "#1E8B4E", family: "Grønn"),
+        DMCThreadColor(num: "910", name: "Smaragd mørk", hex: "#1B7843", family: "Grønn"),
+        DMCThreadColor(num: "909", name: "Smaragd veldig mørk", hex: "#156842", family: "Grønn"),
+        DMCThreadColor(num: "563", name: "Jade lys", hex: "#6FC495", family: "Grønn"),
+        DMCThreadColor(num: "562", name: "Jade medium", hex: "#428F60", family: "Grønn"),
+        DMCThreadColor(num: "561", name: "Jade veldig mørk", hex: "#2F6048", family: "Grønn"),
+        DMCThreadColor(num: "369", name: "Pistasj veldig lys", hex: "#C7D5B3", family: "Grønn"),
+        DMCThreadColor(num: "368", name: "Pistasj lys", hex: "#A0BE99", family: "Grønn"),
+        DMCThreadColor(num: "367", name: "Pistasj mørk", hex: "#647057", family: "Grønn"),
+        DMCThreadColor(num: "989", name: "Skogsgrønn", hex: "#93AD6B", family: "Grønn"),
+        DMCThreadColor(num: "988", name: "Skogsgrønn medium", hex: "#688D52", family: "Grønn"),
+        DMCThreadColor(num: "827", name: "Blå veldig lys", hex: "#B6D6E7", family: "Blå"),
+        DMCThreadColor(num: "3325", name: "Babyblå lys", hex: "#ACC4D6", family: "Blå"),
+        DMCThreadColor(num: "3755", name: "Babyblå", hex: "#7DA5C9", family: "Blå"),
+        DMCThreadColor(num: "334", name: "Babyblå medium", hex: "#6A93C0", family: "Blå"),
+        DMCThreadColor(num: "322", name: "Babyblå mørk", hex: "#607FB4", family: "Blå"),
+        DMCThreadColor(num: "813", name: "Blå lys", hex: "#87ABCC", family: "Blå"),
+        DMCThreadColor(num: "826", name: "Blå medium", hex: "#4090C0", family: "Blå"),
+        DMCThreadColor(num: "824", name: "Blå veldig mørk", hex: "#1F4F86", family: "Blå"),
+        DMCThreadColor(num: "798", name: "Delft mørk", hex: "#2A66AC", family: "Blå"),
+        DMCThreadColor(num: "799", name: "Delft medium", hex: "#5384BE", family: "Blå"),
+        DMCThreadColor(num: "800", name: "Delft blek", hex: "#97B5D5", family: "Blå"),
+        DMCThreadColor(num: "312", name: "Marineblå lys", hex: "#2B5E92", family: "Blå"),
+        DMCThreadColor(num: "311", name: "Marineblå medium", hex: "#1C436A", family: "Blå"),
+        DMCThreadColor(num: "336", name: "Marineblå", hex: "#1F3650", family: "Blå"),
+        DMCThreadColor(num: "939", name: "Marineblå mørk", hex: "#1A2A47", family: "Blå"),
+        DMCThreadColor(num: "820", name: "Kongeblå mørk", hex: "#1F4280", family: "Blå"),
+        DMCThreadColor(num: "597", name: "Turkis", hex: "#00859A", family: "Blå"),
+        DMCThreadColor(num: "996", name: "Elektrisk blå", hex: "#14A2C2", family: "Blå"),
+        DMCThreadColor(num: "554", name: "Fiolett lys", hex: "#C19DBE", family: "Lilla"),
+        DMCThreadColor(num: "553", name: "Fiolett", hex: "#92608A", family: "Lilla"),
+        DMCThreadColor(num: "552", name: "Fiolett medium", hex: "#75517B", family: "Lilla"),
+        DMCThreadColor(num: "327", name: "Fiolett mørk", hex: "#682760", family: "Lilla"),
+        DMCThreadColor(num: "340", name: "Blålilla medium", hex: "#8E84BB", family: "Lilla"),
+        DMCThreadColor(num: "333", name: "Blålilla veldig mørk", hex: "#533E84", family: "Lilla"),
+        DMCThreadColor(num: "794", name: "Kornblomst lys", hex: "#A2AECE", family: "Lilla"),
+        DMCThreadColor(num: "793", name: "Kornblomst medium", hex: "#7E89B7", family: "Lilla"),
+        DMCThreadColor(num: "792", name: "Kornblomst mørk", hex: "#56649E", family: "Lilla"),
+        DMCThreadColor(num: "791", name: "Kornblomst veldig mørk", hex: "#3F4E8E", family: "Lilla"),
+        DMCThreadColor(num: "437", name: "Tan lys", hex: "#D6AB77", family: "Brun"),
+        DMCThreadColor(num: "436", name: "Tan", hex: "#C29161", family: "Brun"),
+        DMCThreadColor(num: "435", name: "Brun veldig lys", hex: "#B07A45", family: "Brun"),
+        DMCThreadColor(num: "434", name: "Brun lys", hex: "#93582C", family: "Brun"),
+        DMCThreadColor(num: "433", name: "Brun medium", hex: "#794022", family: "Brun"),
+        DMCThreadColor(num: "400", name: "Mahogni mørk", hex: "#80532A", family: "Brun"),
+        DMCThreadColor(num: "300", name: "Mahogni veldig mørk", hex: "#6D3F1E", family: "Brun"),
+        DMCThreadColor(num: "301", name: "Mahogni medium", hex: "#936946", family: "Brun"),
+        DMCThreadColor(num: "738", name: "Tan veldig lys", hex: "#DEC089", family: "Brun"),
+        DMCThreadColor(num: "758", name: "Terrakotta veldig lys", hex: "#DB9A8B", family: "Brun"),
+        DMCThreadColor(num: "898", name: "Kaffebrun veldig mørk", hex: "#553527", family: "Brun"),
+        DMCThreadColor(num: "938", name: "Kaffebrun ultramørk", hex: "#422518", family: "Brun"),
+        DMCThreadColor(num: "762", name: "Perlegrå veldig lys", hex: "#DAD9D8", family: "Grå"),
+        DMCThreadColor(num: "415", name: "Perlegrå", hex: "#B7B9B9", family: "Grå"),
+        DMCThreadColor(num: "318", name: "Stålgrå lys", hex: "#A4A4A4", family: "Grå"),
+        DMCThreadColor(num: "414", name: "Stålgrå mørk", hex: "#777879", family: "Grå"),
+        DMCThreadColor(num: "317", name: "Tinngrå", hex: "#6E7172", family: "Grå"),
+        DMCThreadColor(num: "3799", name: "Tinngrå veldig mørk", hex: "#45494B", family: "Grå"),
+        DMCThreadColor(num: "844", name: "Bevergrå ultramørk", hex: "#444140", family: "Grå"),
+        DMCThreadColor(num: "310", name: "Sort", hex: "#000000", family: "Grå")
+    ]
 }
 
 private struct GridResizeRequest: Identifiable {
@@ -927,6 +1526,12 @@ private struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
+private extension PaletteColor {
+    var prefersDarkForeground: Bool {
+        (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55
+    }
+}
+
 private extension String {
     var stomFileName: String {
         let illegalCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
@@ -936,6 +1541,12 @@ private extension String {
 
         let baseName = cleaned.isEmpty ? "bringeduk" : cleaned
         return baseName.hasSuffix(".stom") ? baseName : "\(baseName).stom"
+    }
+}
+
+private extension Character {
+    var isHexadecimalDigit: Bool {
+        isNumber || ("A"..."F").contains(String(self)) || ("a"..."f").contains(String(self))
     }
 }
 
