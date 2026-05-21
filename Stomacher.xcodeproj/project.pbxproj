@@ -31,6 +31,7 @@
 		5E6B7DF463E86757C9F81455 /* PatternFileDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternFileDocument.swift; sourceTree = "<group>"; };
 		642D7F414541777718ABC938 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		73CDFA37788ACA4C4F79E81C /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		86BFA2AEBEE2495B9580A3DF /* Stomacher.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Stomacher.entitlements; sourceTree = "<group>"; };
 		BAB4BE746791E84EDBC4F5E9 /* PatternPDFExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternPDFExporter.swift; sourceTree = "<group>"; };
 		F370D9D00BE5093C10827A31 /* PatternStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternStore.swift; sourceTree = "<group>"; };
 		F8AF11CD06894E9AABACBC18 /* PatternTechnique.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatternTechnique.swift; sourceTree = "<group>"; };
@@ -89,6 +90,7 @@
 				1DD01A4055D53FD7358793C6 /* App.swift */,
 				34A5BAB065F544F4DCC1D6A9 /* Assets.xcassets */,
 				642D7F414541777718ABC938 /* Info.plist */,
+				86BFA2AEBEE2495B9580A3DF /* Stomacher.entitlements */,
 				1279CAC617A755E129D40F6C /* Export */,
 				93219A1BC435DC9276FFE084 /* Models */,
 				A38CEC8D6AA86B133EAD9798 /* Views */,
@@ -181,9 +183,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Stomacher/Stomacher.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Stomacher/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -200,9 +204,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Stomacher/Stomacher.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Stomacher/Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

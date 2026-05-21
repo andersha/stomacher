@@ -5,6 +5,10 @@ struct GridCoordinate: Codable, Hashable, Identifiable {
     var y: Int
 
     var id: String { "\(x):\(y)" }
+
+    func offsetBy(x deltaX: Int, y deltaY: Int) -> GridCoordinate {
+        GridCoordinate(x: x + deltaX, y: y + deltaY)
+    }
 }
 
 struct GridBounds: Equatable {
@@ -215,5 +219,17 @@ extension Sequence where Element == GridCoordinate {
         }
 
         return GridBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY)
+    }
+}
+
+extension String {
+    var stomFileName: String {
+        let illegalCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
+        let cleaned = components(separatedBy: illegalCharacters)
+            .joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let baseName = cleaned.isEmpty ? "bringeduk" : cleaned
+        return baseName.hasSuffix(".stom") ? baseName : "\(baseName).stom"
     }
 }

@@ -1,5 +1,8 @@
 import Foundation
 import SwiftUI
+import OSLog
+
+private let logger = Logger(subsystem: "no.abrahamsen.stomacher", category: "FileSystem")
 
 enum CanvasTool: String, CaseIterable, Identifiable {
     case hand
@@ -51,11 +54,26 @@ enum SelectionMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum MoveMode: String, CaseIterable, Identifiable {
+    case sheet
+    case pattern
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .sheet: "Ark"
+        case .pattern: "Mønster"
+        }
+    }
+}
+
 @MainActor
 final class PatternStore: ObservableObject {
     @Published var document: PatternDocument
     @Published var selectedSwatchID: UUID
     @Published var tool: CanvasTool = .paint
+    @Published var moveMode: MoveMode = .sheet
     @Published var selectionMode: SelectionMode = .rectangle
     @Published var selection = Set<GridCoordinate>()
     @Published var clipboard: [GridCoordinate: UUID] = [:]
@@ -78,6 +96,8 @@ final class PatternStore: ObservableObject {
     private let customPalettesKey = "no.abrahamsen.stomacher.customPalettes"
     private var selectionAnchor: GridCoordinate?
     private var interactionPreviousCoordinate: GridCoordinate?
+    private var patternMoveSnapshot: PatternMoveSnapshot?
+    private var patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
 
     init(document: PatternDocument = PatternDocument()) {
         self.document = document
@@ -116,7 +136,7 @@ final class PatternStore: ObservableObject {
     }
 
     var documentURL: URL {
-        documentsDirectory.appendingPathComponent("bringeduk-\(document.id.uuidString).stom")
+        stomacherDocumentsDirectory.appendingPathComponent("bringeduk-\(document.id.uuidString).stom")
     }
 
     func updateTitle(_ title: String) {
@@ -149,7 +169,9 @@ final class PatternStore: ObservableObject {
         selectionAnchor = coordinate
         interactionPreviousCoordinate = coordinate
 
-        if tool == .select, selectionMode == .rectangle {
+        if tool == .hand, moveMode == .pattern {
+            beginPatternMove(at: coordinate)
+        } else if tool == .select, selectionMode == .rectangle {
             selectRectangle(from: coordinate, to: coordinate)
         } else {
             handleTapOrDrag(at: coordinate)
@@ -157,6 +179,11 @@ final class PatternStore: ObservableObject {
     }
 
     func updateInteraction(at coordinate: GridCoordinate) {
+        if tool == .hand, moveMode == .pattern {
+            updatePatternMove(to: coordinate)
+            return
+        }
+
         guard contains(coordinate) else { return }
 
         if tool == .outline, let previous = interactionPreviousCoordinate {
@@ -172,6 +199,8 @@ final class PatternStore: ObservableObject {
     func endInteraction() {
         selectionAnchor = nil
         interactionPreviousCoordinate = nil
+        patternMoveSnapshot = nil
+        patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
     }
 
     func handleTapOrDrag(at coordinate: GridCoordinate) {
@@ -386,17 +415,43 @@ final class PatternStore: ObservableObject {
         currentDocumentURL != nil
     }
 
+    var containerDocumentsURL: URL? {
+        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else { return nil }
+        let url = containerURL.appendingPathComponent("Documents", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        logger.info("containerDocumentsURL: \(url.path, privacy: .public)")
+        return url
+    }
+
     func save() throws {
         if let currentDocumentURL {
             try save(to: currentDocumentURL)
         } else {
-            try save(to: documentURL)
+            try saveToDefaultLocation()
         }
     }
 
     func save(to url: URL) throws {
+        logger.info("Saving to: \(url.path, privacy: .public)")
         try writeDocument(to: url)
         markSaved(to: url)
+    }
+
+    func saveToDefaultLocation(filename: String? = nil) throws {
+        let directory = try defaultExportDirectory().url
+        let requestedFilename = filename ?? document.title.stomFileName
+        let url = uniqueFileURL(in: directory, filename: requestedFilename)
+        try save(to: url)
+    }
+
+    func prepareExportCopy(filename: String) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("StomacherExport-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let url = directory.appendingPathComponent(filename)
+        try writeDocument(to: url)
+        return url
     }
 
     func autosaveIfNeeded() throws {
@@ -406,6 +461,7 @@ final class PatternStore: ObservableObject {
     }
 
     func load(url: URL) throws {
+        logger.info("Loading from: \(url.path, privacy: .public)")
         let data = try Data(contentsOf: url)
         document = try decoder.decode(PatternDocument.self, from: data)
         normalizeCurrentPalette()
@@ -435,12 +491,25 @@ final class PatternStore: ObservableObject {
         statusMessage = "Fjernet ytterkant"
     }
 
-    func markSaved(to url: URL? = nil, message: String = "Lagret") {
+    func markSaved(to url: URL? = nil, message: String? = nil) {
         if let url {
             currentDocumentURL = url
+            statusMessage = message ?? Self.savedMessage(for: url)
+        } else {
+            statusMessage = message ?? "Lagret"
         }
-        statusMessage = message
         hasUnsavedChanges = false
+    }
+
+    private static func savedMessage(for url: URL) -> String {
+        let path = url.path
+        if path.contains("/Mobile Documents/com~apple~CloudDocs/") {
+            return "Lagret til iCloud Drive"
+        }
+        if path.contains("/Mobile Documents/") {
+            return "Lagret til app-container (kun synlig med appen installert)"
+        }
+        return "Lagret lokalt"
     }
 
     private func transformSelection(_ transform: (GridCoordinate, GridBounds) -> GridCoordinate) {
@@ -458,6 +527,64 @@ final class PatternStore: ObservableObject {
 
         selection = newSelection
         touch()
+    }
+
+    private func beginPatternMove(at coordinate: GridCoordinate) {
+        guard let bounds = patternContentBounds else {
+            statusMessage = "Ingen ruter å flytte"
+            return
+        }
+
+        patternMoveSnapshot = PatternMoveSnapshot(
+            start: coordinate,
+            bounds: bounds,
+            cells: document.cells,
+            outlineCells: document.outlineCells,
+            selection: selection
+        )
+        patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+        statusMessage = "Flytter mønster"
+    }
+
+    private func updatePatternMove(to coordinate: GridCoordinate) {
+        guard let snapshot = patternMoveSnapshot else { return }
+
+        let requestedOffset = GridCoordinate(
+            x: coordinate.x - snapshot.start.x,
+            y: coordinate.y - snapshot.start.y
+        )
+        let offset = clampedMoveOffset(requestedOffset, for: snapshot.bounds)
+        guard offset != patternMoveAppliedOffset else {
+            if offset != requestedOffset {
+                statusMessage = "Kanten er nådd"
+            }
+            return
+        }
+
+        document.cells = snapshot.cells.reduce(into: [:]) { movedCells, entry in
+            movedCells[entry.key.offsetBy(x: offset.x, y: offset.y)] = entry.value
+        }
+        document.outlineCells = Set(snapshot.outlineCells.map { $0.offsetBy(x: offset.x, y: offset.y) })
+        selection = Set(snapshot.selection.map { $0.offsetBy(x: offset.x, y: offset.y) }.filter(contains))
+        patternMoveAppliedOffset = offset
+        touch()
+        statusMessage = "Flyttet mønster \(offset.x), \(offset.y)"
+    }
+
+    private var patternContentBounds: GridBounds? {
+        (Array(document.cells.keys) + Array(document.outlineCells)).bounds
+    }
+
+    private func clampedMoveOffset(_ offset: GridCoordinate, for bounds: GridBounds) -> GridCoordinate {
+        let minX = -bounds.minX
+        let maxX = document.width - 1 - bounds.maxX
+        let minY = -bounds.minY
+        let maxY = document.height - 1 - bounds.maxY
+
+        return GridCoordinate(
+            x: min(max(offset.x, minX), maxX),
+            y: min(max(offset.y, minY), maxY)
+        )
     }
 
     private func selectedPaintedCells() -> [GridCoordinate: UUID] {
@@ -566,6 +693,62 @@ final class PatternStore: ObservableObject {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 
+    private var stomacherDocumentsDirectory: URL {
+        let directory = documentsDirectory.appendingPathComponent("Stomacher", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func defaultExportDirectory() throws -> PreparedDirectory {
+        if let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) {
+            logger.info("iCloud container URL: \(containerURL.path, privacy: .public)")
+            let dir = try prepareDirectory(at: containerURL.appendingPathComponent("Documents", isDirectory: true))
+            logger.info("Using iCloud Documents directory: \(dir.url.path, privacy: .public)")
+            return dir
+        }
+
+        logger.warning("iCloud container not available — falling back to local Documents/Stomacher")
+        return try prepareDirectory(at: documentsDirectory.appendingPathComponent("Stomacher", isDirectory: true))
+    }
+
+    private func prepareDirectory(at url: URL) throws -> PreparedDirectory {
+        var isDirectory: ObjCBool = false
+        let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+
+        if exists, isDirectory.boolValue {
+            return PreparedDirectory(url: url, wasCreated: false)
+        }
+
+        if exists {
+            throw CocoaError(.fileWriteFileExists)
+        }
+
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return PreparedDirectory(url: url, wasCreated: true)
+    }
+
+    private func uniqueFileURL(in directory: URL, filename: String) -> URL {
+        let baseURL = directory.appendingPathComponent(filename)
+        guard FileManager.default.fileExists(atPath: baseURL.path) else {
+            return baseURL
+        }
+
+        let fileExtension = baseURL.pathExtension
+        let baseName = baseURL.deletingPathExtension().lastPathComponent
+
+        for index in 2...999 {
+            let candidateName = fileExtension.isEmpty
+                ? "\(baseName) \(index)"
+                : "\(baseName) \(index).\(fileExtension)"
+            let candidateURL = directory.appendingPathComponent(candidateName)
+            if !FileManager.default.fileExists(atPath: candidateURL.path) {
+                return candidateURL
+            }
+        }
+
+        return directory.appendingPathComponent("\(baseName) \(UUID().uuidString).\(fileExtension)")
+    }
+
     private func normalizeCurrentPalette() {
         document.palette = PatternPalette.normalizedSwatches(document.palette)
 
@@ -596,4 +779,17 @@ final class PatternStore: ObservableObject {
             .filter { !$0.isBuiltIn }
             .map { PatternPalette(id: $0.id, name: $0.name, swatches: PatternPalette.normalizedSwatches($0.swatches)) }
     }
+}
+
+private struct PatternMoveSnapshot {
+    var start: GridCoordinate
+    var bounds: GridBounds
+    var cells: [GridCoordinate: UUID]
+    var outlineCells: Set<GridCoordinate>
+    var selection: Set<GridCoordinate>
+}
+
+private struct PreparedDirectory {
+    var url: URL
+    var wasCreated: Bool
 }

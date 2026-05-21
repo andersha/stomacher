@@ -1,13 +1,17 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
+import OSLog
+
+private let logger = Logger(subsystem: "no.abrahamsen.stomacher", category: "FileSystem")
 
 struct ContentView: View {
     @StateObject private var store: PatternStore
     @State private var pdfURL: URL?
     @State private var showingShareSheet = false
+    @State private var showingDocumentBrowser = false
     @State private var showingImporter = false
-    @State private var showingExporter = false
-    @State private var shouldEnableAutosaveAfterExport = false
+    @State private var pendingExport: PendingExport?
     @State private var showingNewConfirmation = false
     @State private var replaceSourceID = PaletteSwatch.defaultPalette[0].id
     @State private var replaceTargetID = PaletteSwatch.defaultPalette[1].id
@@ -52,14 +56,24 @@ struct ContentView: View {
                         Label("Ny", systemImage: "doc.badge.plus")
                     }
 
-                    Button {
-                        saveDocument()
+                    Menu {
+                        Button {
+                            saveDocument()
+                        } label: {
+                            Label("Lagre", systemImage: "square.and.arrow.down")
+                        }
+
+                        Button {
+                            presentExporter()
+                        } label: {
+                            Label("Lagre som...", systemImage: "folder.badge.plus")
+                        }
                     } label: {
                         Label("Lagre", systemImage: "square.and.arrow.down")
                     }
 
                     Button {
-                        showingImporter = true
+                        showingDocumentBrowser = true
                     } label: {
                         Label("Åpne", systemImage: "folder")
                     }
@@ -90,38 +104,42 @@ struct ContentView: View {
         } message: {
             Text("Ulagrede endringer i dette mønsteret vil gå tapt.")
         }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.stomPattern]) { result in
-            do {
-                let url = try result.get()
-                let isAccessing = url.startAccessingSecurityScopedResource()
-                defer {
-                    if isAccessing {
-                        url.stopAccessingSecurityScopedResource()
+        .sheet(isPresented: $showingImporter) {
+            StomacherDocumentImporter(
+                initialDirectory: store.containerDocumentsURL,
+                onCompletion: { result in
+                    showingImporter = false
+                    do {
+                        let url = try result.get()
+                        let isAccessing = url.startAccessingSecurityScopedResource()
+                        defer {
+                            if isAccessing { url.stopAccessingSecurityScopedResource() }
+                        }
+                        try store.load(url: url)
+                    } catch {
+                        store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
                     }
-                }
-                try store.load(url: url)
-            } catch {
-                store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
-            }
+                },
+                onCancellation: { showingImporter = false }
+            )
         }
-        .fileExporter(
-            isPresented: $showingExporter,
-            document: PatternFileDocument(pattern: store.document),
-            contentType: .stomPattern,
-            defaultFilename: store.document.title.stomFileName
-        ) { result in
-            switch result {
-            case .success(let url):
-                store.markSaved(to: url)
-                if shouldEnableAutosaveAfterExport {
-                    store.autosaveEnabled = true
-                    store.statusMessage = "Autosave på"
-                    shouldEnableAutosaveAfterExport = false
+        .sheet(item: $pendingExport, onDismiss: cleanupPendingExport) { export in
+            StomacherDocumentExporter(
+                exportURL: export.url,
+                initialDirectory: export.initialDirectory,
+                onCompletion: handleExportResult,
+                onCancellation: {
+                    pendingExport = nil
                 }
-            case .failure(let error):
-                store.statusMessage = "Kunne ikke lagre: \(error.localizedDescription)"
-                shouldEnableAutosaveAfterExport = false
-            }
+            )
+        }
+        .sheet(isPresented: $showingDocumentBrowser) {
+            DocumentListView(store: store, onOpenFromOtherLocation: {
+                showingDocumentBrowser = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    showingImporter = true
+                }
+            })
         }
         .sheet(isPresented: $showingShareSheet) {
             if let pdfURL {
@@ -155,11 +173,6 @@ struct ContentView: View {
     }
 
     private func saveDocument() {
-        guard store.canAutosave else {
-            showingExporter = true
-            return
-        }
-
         do {
             try store.save()
         } catch {
@@ -170,18 +183,51 @@ struct ContentView: View {
     private func setAutosave(_ isEnabled: Bool) {
         if isEnabled {
             guard store.canAutosave else {
-                shouldEnableAutosaveAfterExport = true
-                showingExporter = true
+                do {
+                    try store.save()
+                    store.autosaveEnabled = true
+                    store.statusMessage = "Autosave på"
+                } catch {
+                    store.statusMessage = "Kunne ikke lagre: \(error.localizedDescription)"
+                }
                 return
             }
 
             store.autosaveEnabled = true
             store.statusMessage = "Autosave på"
         } else {
-            shouldEnableAutosaveAfterExport = false
             store.autosaveEnabled = false
             store.statusMessage = "Autosave av"
         }
+    }
+
+    private func presentExporter() {
+        do {
+            let url = try store.prepareExportCopy(filename: store.document.title.stomFileName)
+            logger.info("Lagre som — tempfil: \(url.path, privacy: .public)")
+            pendingExport = PendingExport(url: url, initialDirectory: store.containerDocumentsURL)
+        } catch {
+            store.statusMessage = "Kunne ikke klargjøre lagring: \(error.localizedDescription)"
+        }
+    }
+
+    private func handleExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            logger.info("Lagre som — valgt destinasjon: \(url.path, privacy: .public)")
+            store.markSaved(to: url)
+        case .failure(let error):
+            logger.error("Lagre som — feil: \(error.localizedDescription, privacy: .public)")
+            store.statusMessage = "Kunne ikke lagre: \(error.localizedDescription)"
+        }
+        pendingExport = nil
+    }
+
+    private func cleanupPendingExport() {
+        if let pendingExport {
+            try? FileManager.default.removeItem(at: pendingExport.url.deletingLastPathComponent())
+        }
+        pendingExport = nil
     }
 
     private func syncReplaceColors() {
@@ -205,6 +251,9 @@ private struct InspectorView: View {
 
     private var toolDetailBackground: Color {
         Color(uiColor: .secondarySystemFill)
+    }
+    private var supportsApplePencilEditing: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
     }
 
     var body: some View {
@@ -236,8 +285,10 @@ private struct InspectorView: View {
             }
 
             Section("Verktøy") {
-                Toggle(isOn: $store.usesApplePencilForEditing) {
-                    Label("Apple Pencil", systemImage: "applepencil")
+                if supportsApplePencilEditing {
+                    Toggle(isOn: $store.usesApplePencilForEditing) {
+                        Label("Apple Pencil", systemImage: "applepencil")
+                    }
                 }
 
                 ForEach(CanvasTool.allCases) { tool in
@@ -257,6 +308,16 @@ private struct InspectorView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(store.tool == tool ? .isSelected : [])
+
+                    if store.tool == tool, tool == .hand {
+                        Picker("Flytt", selection: $store.moveMode) {
+                            ForEach(MoveMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .listRowBackground(toolDetailBackground)
+                    }
 
                     if store.tool == tool, tool == .select {
                         Group {
@@ -1455,6 +1516,12 @@ private struct DMCThreadColor: Identifiable, Equatable {
     ]
 }
 
+private struct PendingExport: Identifiable {
+    let id = UUID()
+    let url: URL
+    let initialDirectory: URL?
+}
+
 private struct GridResizeRequest: Identifiable {
     let id = UUID()
     var width: Int
@@ -1489,6 +1556,9 @@ private struct ZoomControls: View {
 
 private struct StatusBar: View {
     @ObservedObject var store: PatternStore
+    private var supportsApplePencilEditing: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
     var body: some View {
         HStack {
@@ -1504,7 +1574,7 @@ private struct StatusBar: View {
             if store.autosaveEnabled {
                 Text("Autosave")
             }
-            if store.usesApplePencilForEditing {
+            if supportsApplePencilEditing && store.usesApplePencilForEditing {
                 Text("Pencil")
             }
         }
@@ -1513,6 +1583,262 @@ private struct StatusBar: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.thinMaterial)
+    }
+}
+
+private struct PatternThumbnailCanvas: View {
+    let document: PatternDocument
+
+    private let thumbnailSize = CGSize(width: 90, height: 60)
+
+    var body: some View {
+        Canvas { context, size in
+            let bounds = document.printableBounds
+            guard bounds.width > 0, bounds.height > 0 else { return }
+
+            let scaleX = size.width / CGFloat(bounds.width)
+            let scaleY = size.height / CGFloat(bounds.height)
+            let cellSize = min(scaleX, scaleY)
+            let offsetX = (size.width - cellSize * CGFloat(bounds.width)) / 2
+            let offsetY = (size.height - cellSize * CGFloat(bounds.height)) / 2
+
+            context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.white))
+
+            let patternArea = document.activePatternArea()
+
+            for (coordinate, swatchID) in document.cells {
+                guard let swatch = document.swatch(for: swatchID) else { continue }
+                guard patternArea?.contains(coordinate) ?? true else { continue }
+
+                let x = CGFloat(coordinate.x - bounds.minX) * cellSize + offsetX
+                let y = CGFloat(coordinate.y - bounds.minY) * cellSize + offsetY
+                let rect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
+                    .insetBy(dx: cellSize * 0.1, dy: cellSize * 0.1)
+
+                switch document.technique {
+                case .beads:
+                    context.fill(Path(ellipseIn: rect), with: .color(swatch.color))
+                case .stitches:
+                    var stitch = Path()
+                    stitch.move(to: CGPoint(x: rect.minX, y: rect.minY))
+                    stitch.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+                    stitch.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+                    stitch.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+                    context.stroke(stitch, with: .color(swatch.color), lineWidth: max(0.8, cellSize * 0.18))
+                }
+            }
+        }
+        .frame(width: thumbnailSize.width, height: thumbnailSize.height)
+    }
+}
+
+private struct PatternThumbnail: View {
+    let url: URL
+
+    @State private var document: PatternDocument?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let document {
+                PatternThumbnailCanvas(document: document)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.black.opacity(0.08)))
+            } else {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.secondary.opacity(0.1))
+                    .overlay {
+                        if !failed {
+                            ProgressView().scaleEffect(0.7)
+                        }
+                    }
+            }
+        }
+        .frame(width: 90, height: 60)
+        .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        let decoded: PatternDocument? = await Task.detached(priority: .utility) {
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try? decoder.decode(PatternDocument.self, from: data)
+        }.value
+        if let decoded {
+            document = decoded
+        } else {
+            failed = true
+        }
+    }
+}
+
+private struct DocumentListItem: Identifiable {
+    let id = UUID()
+    let url: URL
+    let modifiedAt: Date
+
+    var displayName: String {
+        url.deletingPathExtension().lastPathComponent
+    }
+}
+
+private struct DocumentListView: View {
+    @ObservedObject var store: PatternStore
+    var onOpenFromOtherLocation: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var files: [DocumentListItem] = []
+    @State private var pendingDelete: DocumentListItem?
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if files.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "doc")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.tertiary)
+                        Text("Ingen lagrede mønstre")
+                            .font(.headline)
+                        Text("Lagrede mønstre vises her.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    List {
+                        ForEach(files) { file in
+                            Button {
+                                openFile(file)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(file.displayName)
+                                            .foregroundStyle(.primary)
+                                        Text(file.modifiedAt, style: .relative)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                    PatternThumbnail(url: file.url)
+                                }
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingDelete = file
+                                } label: {
+                                    Label("Slett", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Bringeduk")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Lukk") { dismiss() }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Fra annet sted…") {
+                        onOpenFromOtherLocation()
+                    }
+                }
+            }
+        }
+        .onAppear(perform: loadFiles)
+        .alert("Slett mønster?", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        )) {
+            Button("Avbryt", role: .cancel) { pendingDelete = nil }
+            Button("Slett", role: .destructive) {
+                if let file = pendingDelete { deleteFile(file) }
+                pendingDelete = nil
+            }
+        } message: {
+            Text("«\(pendingDelete?.displayName ?? "")» slettes permanent og kan ikke gjenopprettes.")
+        }
+    }
+
+    private func openFile(_ file: DocumentListItem) {
+        dismiss()
+        do {
+            let isAccessing = file.url.startAccessingSecurityScopedResource()
+            defer { if isAccessing { file.url.stopAccessingSecurityScopedResource() } }
+            try store.load(url: file.url)
+        } catch {
+            store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
+        }
+    }
+
+    private func deleteFile(_ file: DocumentListItem) {
+        do {
+            try FileManager.default.removeItem(at: file.url)
+            files.removeAll { $0.id == file.id }
+        } catch {
+            store.statusMessage = "Kunne ikke slette: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadFiles() {
+        guard let dir = store.containerDocumentsURL else { files = []; return }
+        let urls = (try? FileManager.default.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: .skipsHiddenFiles
+        )) ?? []
+        files = urls
+            .filter { $0.pathExtension == "stom" }
+            .map { url in
+                let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return DocumentListItem(url: url, modifiedAt: modified)
+            }
+            .sorted { $0.modifiedAt > $1.modifiedAt }
+    }
+}
+
+private struct StomacherDocumentImporter: UIViewControllerRepresentable {
+    var initialDirectory: URL?
+    var onCompletion: (Result<URL, Error>) -> Void
+    var onCancellation: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCompletion: onCompletion, onCancellation: onCancellation)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.stomPattern])
+        picker.delegate = context.coordinator
+        picker.shouldShowFileExtensions = true
+        picker.directoryURL = initialDirectory
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var onCompletion: (Result<URL, Error>) -> Void
+        var onCancellation: () -> Void
+
+        init(onCompletion: @escaping (Result<URL, Error>) -> Void, onCancellation: @escaping () -> Void) {
+            self.onCompletion = onCompletion
+            self.onCancellation = onCancellation
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                onCompletion(.failure(CocoaError(.fileReadUnknown)))
+                return
+            }
+            onCompletion(.success(url))
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancellation()
+        }
     }
 }
 
@@ -1526,21 +1852,56 @@ private struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-private extension PaletteColor {
-    var prefersDarkForeground: Bool {
-        (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55
+private struct StomacherDocumentExporter: UIViewControllerRepresentable {
+    var exportURL: URL
+    var initialDirectory: URL?
+    var onCompletion: (Result<URL, Error>) -> Void
+    var onCancellation: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onCompletion: onCompletion, onCancellation: onCancellation)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forExporting: [exportURL], asCopy: false)
+        picker.delegate = context.coordinator
+        picker.shouldShowFileExtensions = true
+        picker.directoryURL = initialDirectory
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        var onCompletion: (Result<URL, Error>) -> Void
+        var onCancellation: () -> Void
+
+        init(
+            onCompletion: @escaping (Result<URL, Error>) -> Void,
+            onCancellation: @escaping () -> Void
+        ) {
+            self.onCompletion = onCompletion
+            self.onCancellation = onCancellation
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                onCompletion(.failure(CocoaError(.fileWriteUnknown)))
+                return
+            }
+
+            onCompletion(.success(url))
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancellation()
+        }
     }
 }
 
-private extension String {
-    var stomFileName: String {
-        let illegalCharacters = CharacterSet(charactersIn: "/\\?%*|\"<>:")
-        let cleaned = components(separatedBy: illegalCharacters)
-            .joined(separator: "-")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let baseName = cleaned.isEmpty ? "bringeduk" : cleaned
-        return baseName.hasSuffix(".stom") ? baseName : "\(baseName).stom"
+private extension PaletteColor {
+    var prefersDarkForeground: Bool {
+        (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55
     }
 }
 

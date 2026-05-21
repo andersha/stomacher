@@ -21,6 +21,11 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSSupportsOpeningDocumentsInPlace: true
+        NSUbiquitousContainers:
+          iCloud.$(PRODUCT_BUNDLE_IDENTIFIER):
+            NSUbiquitousContainerIsDocumentScopePublic: true
+            NSUbiquitousContainerName: Stomacher
+            NSUbiquitousContainerSupportedFolderLevels: Any
         UILaunchScreen: {}
         CFBundleDocumentTypes:
           - CFBundleTypeName: Bringeduk pattern
@@ -49,6 +54,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
     settings:
       base:
+        CODE_SIGN_ENTITLEMENTS: Stomacher/Stomacher.entitlements
         PRODUCT_BUNDLE_IDENTIFIER: no.abrahamsen.stomacher
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"

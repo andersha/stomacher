@@ -30,4 +30,10 @@ xcodegen generate
 xcodebuild -project Stomacher.xcodeproj -scheme Stomacher -sdk iphonesimulator -derivedDataPath ./DerivedData build
 ```
 
+I Codex/sandboxet miljø bør verifisering kjøres med generisk iOS-destinasjon, siden CoreSimulator ofte ikke er tilgjengelig:
+
+```sh
+xcodebuild -project Stomacher.xcodeproj -scheme Stomacher -destination generic/platform=iOS -derivedDataPath ./DerivedData CODE_SIGNING_ALLOWED=NO build
+```
+
 Åpne `Stomacher.xcodeproj` i Xcode for å kjøre appen på iPad eller simulator.

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct PatternCanvasView: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -22,6 +23,9 @@ struct PatternCanvasView: View {
     private var majorGridColor: Color {
         colorScheme == .dark ? .black.opacity(0.34) : .secondary.opacity(0.36)
     }
+    private var supportsApplePencilEditing: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad
+    }
 
     var body: some View {
         ScrollView([.horizontal, .vertical]) {
@@ -41,8 +45,8 @@ struct PatternCanvasView: View {
                 DrawInputOverlay(
                     store: store,
                     cellSize: cellSize,
-                    isEnabled: store.tool != .hand,
-                    usesApplePencilOnly: store.usesApplePencilForEditing
+                    isEnabled: store.tool != .hand || store.moveMode == .pattern,
+                    usesApplePencilOnly: supportsApplePencilEditing && store.usesApplePencilForEditing
                 )
                 .frame(width: canvasSize.width, height: canvasSize.height)
             }
