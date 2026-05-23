@@ -36,6 +36,7 @@ struct PatternCanvasView: View {
                     drawOutsidePatternArea(in: &context, patternArea: patternArea)
                     drawCells(in: &context, patternArea: patternArea)
                     drawGrid(in: &context)
+                    drawHiddenUnusedArea(in: &context, patternArea: patternArea)
                     drawOutline(in: &context, patternArea: patternArea)
                     drawSelection(in: &context)
                 }
@@ -128,6 +129,7 @@ struct PatternCanvasView: View {
 
     private func drawOutsidePatternArea(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?) {
         guard let patternArea else { return }
+        guard !store.document.hideUnusedArea else { return }
         let outsideColor: Color = colorScheme == .dark ? .black.opacity(0.16) : .black.opacity(0.07)
 
         for y in 0..<store.document.height {
@@ -135,6 +137,18 @@ struct PatternCanvasView: View {
                 let coordinate = GridCoordinate(x: x, y: y)
                 guard !patternArea.contains(coordinate) else { continue }
                 context.fill(Path(rect(for: coordinate)), with: .color(outsideColor))
+            }
+        }
+    }
+
+    private func drawHiddenUnusedArea(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?) {
+        guard let patternArea, store.document.hideUnusedArea else { return }
+
+        for y in 0..<store.document.height {
+            for x in 0..<store.document.width {
+                let coordinate = GridCoordinate(x: x, y: y)
+                guard !patternArea.contains(coordinate) else { continue }
+                context.fill(Path(rect(for: coordinate)), with: .color(workspaceBackground))
             }
         }
     }

@@ -33,6 +33,7 @@ struct PatternDocument: Codable, Identifiable {
     var palette: [PaletteSwatch]
     var cells: [GridCoordinate: UUID]
     var outlineCells: Set<GridCoordinate>
+    var hideUnusedArea: Bool
     var createdAt: Date
     var updatedAt: Date
 
@@ -48,6 +49,7 @@ struct PatternDocument: Codable, Identifiable {
         case palette
         case cells
         case outlineCells
+        case hideUnusedArea
         case createdAt
         case updatedAt
     }
@@ -64,6 +66,7 @@ struct PatternDocument: Codable, Identifiable {
         palette: [PaletteSwatch] = PaletteSwatch.defaultPalette,
         cells: [GridCoordinate: UUID] = [:],
         outlineCells: Set<GridCoordinate> = [],
+        hideUnusedArea: Bool = false,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -78,6 +81,7 @@ struct PatternDocument: Codable, Identifiable {
         self.palette = palette
         self.cells = cells
         self.outlineCells = outlineCells
+        self.hideUnusedArea = hideUnusedArea
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -95,6 +99,7 @@ struct PatternDocument: Codable, Identifiable {
         palette = try container.decode([PaletteSwatch].self, forKey: .palette)
         cells = try container.decode([GridCoordinate: UUID].self, forKey: .cells)
         outlineCells = try container.decodeIfPresent(Set<GridCoordinate>.self, forKey: .outlineCells) ?? []
+        hideUnusedArea = try container.decodeIfPresent(Bool.self, forKey: .hideUnusedArea) ?? false
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
@@ -112,6 +117,7 @@ struct PatternDocument: Codable, Identifiable {
         try container.encode(palette, forKey: .palette)
         try container.encode(cells, forKey: .cells)
         try container.encode(outlineCells, forKey: .outlineCells)
+        try container.encode(hideUnusedArea, forKey: .hideUnusedArea)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }

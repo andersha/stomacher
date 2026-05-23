@@ -38,7 +38,7 @@ struct PatternPDFExporter {
         drawLegend(document: document, origin: CGPoint(x: margin, y: margin + 86))
         drawOverview(document: document, rect: CGRect(x: 430, y: margin + 82, width: 360, height: 360))
 
-        let note = "Utskriften bruker både farge og symbol slik at mønsteret kan leses selv når fargene er like eller skrives ut i gråtoner. Hver rute svarer til én \(document.technique.unitTitle)."
+        let note = "Utskriften bruker både farge og symbol slik at mønsteret kan leses selv når fargene er like eller skrives ut i gråtoner. Hver rute svarer til \(document.technique.unitTitleWithArticle)."
         note.draw(in: CGRect(x: margin, y: pageRect.height - 92, width: pageRect.width - margin * 2, height: 48), withAttributes: [
             .font: UIFont.systemFont(ofSize: 12),
             .foregroundColor: UIColor.black
@@ -68,16 +68,13 @@ struct PatternPDFExporter {
     }
 
     private func drawOverview(document: PatternDocument, rect: CGRect) {
-        UIColor.secondaryLabel.withAlphaComponent(0.16).setStroke()
-        UIBezierPath(rect: rect).stroke()
-
         let scale = min(rect.width / CGFloat(document.width), rect.height / CGFloat(document.height))
         let drawnSize = CGSize(width: CGFloat(document.width) * scale, height: CGFloat(document.height) * scale)
         let origin = CGPoint(x: rect.midX - drawnSize.width / 2, y: rect.midY - drawnSize.height / 2)
 
         let patternArea = document.activePatternArea()
 
-        if let patternArea {
+        if let patternArea, !document.hideUnusedArea {
             UIColor.systemGray.withAlphaComponent(0.10).setFill()
             for y in 0..<document.height {
                 for x in 0..<document.width {
@@ -201,7 +198,7 @@ struct PatternPDFExporter {
                     UIColor(hex: swatch.hex).withAlphaComponent(0.62).setFill()
                     UIBezierPath(rect: rect).fill()
                     drawSymbol(swatch.symbol, in: rect)
-                } else if let patternArea, !patternArea.contains(documentCoordinate) {
+                } else if let patternArea, !document.hideUnusedArea, !patternArea.contains(documentCoordinate) {
                     UIColor.systemGray.withAlphaComponent(0.14).setFill()
                     UIBezierPath(rect: rect).fill()
                 }
@@ -215,7 +212,8 @@ struct PatternPDFExporter {
             rows: visibleHeight,
             startX: startX,
             startY: startY,
-            majorEvery: document.gridBlockSize
+            majorEvery: document.gridBlockSize,
+            patternArea: document.hideUnusedArea ? patternArea : nil
         )
         drawOutline(document: document, origin: origin, startX: startX, startY: startY, visibleWidth: visibleWidth, visibleHeight: visibleHeight, cellSize: cellSize)
 
@@ -258,7 +256,12 @@ struct PatternPDFExporter {
         }
     }
 
-    private func drawGrid(rect: CGRect, cellSize: CGFloat, columns: Int, rows: Int, startX: Int, startY: Int, majorEvery: Int) {
+    private func drawGrid(rect: CGRect, cellSize: CGFloat, columns: Int, rows: Int, startX: Int, startY: Int, majorEvery: Int, patternArea: Set<GridCoordinate>?) {
+        if let patternArea {
+            drawVisiblePatternGrid(rect: rect, cellSize: cellSize, columns: columns, rows: rows, startX: startX, startY: startY, majorEvery: majorEvery, patternArea: patternArea)
+            return
+        }
+
         let gridPath = UIBezierPath()
         for x in 0...columns {
             let px = rect.minX + CGFloat(x) * cellSize
@@ -285,6 +288,57 @@ struct PatternPDFExporter {
             majorPath.move(to: CGPoint(x: rect.minX, y: py))
             majorPath.addLine(to: CGPoint(x: rect.maxX, y: py))
         }
+        UIColor.black.withAlphaComponent(0.52).setStroke()
+        majorPath.lineWidth = 1
+        majorPath.stroke()
+    }
+
+    private func drawVisiblePatternGrid(rect: CGRect, cellSize: CGFloat, columns: Int, rows: Int, startX: Int, startY: Int, majorEvery: Int, patternArea: Set<GridCoordinate>) {
+        let minorPath = UIBezierPath()
+        let majorPath = UIBezierPath()
+
+        func path(forMajorCoordinate coordinate: Int) -> UIBezierPath {
+            coordinate.isMultiple(of: majorEvery) ? majorPath : minorPath
+        }
+
+        for x in 0...columns {
+            let documentX = startX + x
+            let px = rect.minX + CGFloat(x) * cellSize
+
+            for y in 0..<rows {
+                let documentY = startY + y
+                let leftCoordinate = GridCoordinate(x: documentX - 1, y: documentY)
+                let rightCoordinate = GridCoordinate(x: documentX, y: documentY)
+                guard patternArea.contains(leftCoordinate) || patternArea.contains(rightCoordinate) else { continue }
+
+                let path = path(forMajorCoordinate: documentX)
+                let y1 = rect.minY + CGFloat(y) * cellSize
+                path.move(to: CGPoint(x: px, y: y1))
+                path.addLine(to: CGPoint(x: px, y: y1 + cellSize))
+            }
+        }
+
+        for y in 0...rows {
+            let documentY = startY + y
+            let py = rect.minY + CGFloat(y) * cellSize
+
+            for x in 0..<columns {
+                let documentX = startX + x
+                let upperCoordinate = GridCoordinate(x: documentX, y: documentY - 1)
+                let lowerCoordinate = GridCoordinate(x: documentX, y: documentY)
+                guard patternArea.contains(upperCoordinate) || patternArea.contains(lowerCoordinate) else { continue }
+
+                let path = path(forMajorCoordinate: documentY)
+                let x1 = rect.minX + CGFloat(x) * cellSize
+                path.move(to: CGPoint(x: x1, y: py))
+                path.addLine(to: CGPoint(x: x1 + cellSize, y: py))
+            }
+        }
+
+        UIColor.black.withAlphaComponent(0.24).setStroke()
+        minorPath.lineWidth = 0.5
+        minorPath.stroke()
+
         UIColor.black.withAlphaComponent(0.52).setStroke()
         majorPath.lineWidth = 1
         majorPath.stroke()

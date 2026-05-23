@@ -11,6 +11,7 @@ SwiftUI-prototype for å tegne bringeduk-mønstre på et vanlig rutenett.
 - Velg standardpaletten eller lag egne paletter med fargekart og RGB/HSL/CMYK/HSV-koder.
 - Flytt, tegn, visk, marker og pipette.
 - Egen ytterkant for mønsteret; uten ytterkant brukes hele rutenettet.
+- Skjul ubrukt område utenfor egen ytterkant i arbeidsflaten og PDF-eksport.
 - Marker med rektangel som standard, eller bytt til enkeltruter.
 - Apple Pencil-modus der bare pennen redigerer mønsteret, mens finger brukes til flytting og klyp-zoom.
 - Apple Pencil double-tap bytter mellom tegn og visk.

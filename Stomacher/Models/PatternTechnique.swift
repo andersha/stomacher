@@ -22,6 +22,14 @@ enum PatternTechnique: String, Codable, CaseIterable, Identifiable {
         case .satinStitch: "plattsømsting"
         }
     }
+
+    var unitTitleWithArticle: String {
+        switch self {
+        case .beads: "én perle"
+        case .crossStitches: "ett korssting"
+        case .satinStitch: "én plattsøm"
+        }
+    }
 }
 
 struct PaletteSwatch: Identifiable, Codable, Hashable {

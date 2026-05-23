@@ -396,6 +396,14 @@ private struct InspectorView: View {
                         Group {
                             LabeledContent("Ruter", value: "\(store.document.outlineCells.count)")
 
+                            Toggle(isOn: Binding {
+                                store.document.hideUnusedArea
+                            } set: { newValue in
+                                store.updateHideUnusedArea(newValue)
+                            }) {
+                                Label("Skjul ubrukt område", systemImage: "square.dashed")
+                            }
+
                             if store.document.hasCustomOutline {
                                 Text(store.document.activePatternArea() == nil ? "Ytterkanten er ikke lukket ennå. Når den lukkes brukes den som mønstergrense." : "Ytterkanten brukes som aktiv mønstergrense.")
                                     .font(.caption)

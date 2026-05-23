@@ -154,6 +154,11 @@ final class PatternStore: ObservableObject {
         touch()
     }
 
+    func updateHideUnusedArea(_ hideUnusedArea: Bool) {
+        document.hideUnusedArea = hideUnusedArea
+        touch()
+    }
+
     func togglePaintAndEraseFromPencilDoubleTap() {
         if tool == .erase {
             tool = .paint
