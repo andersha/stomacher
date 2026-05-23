@@ -10,10 +10,14 @@ private enum PendingOpenAction {
     case importer
 }
 
+private struct ShareFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 struct ContentView: View {
     @StateObject private var store: PatternStore
-    @State private var shareURL: URL?
-    @State private var showingShareSheet = false
+    @State private var shareFile: ShareFile?
     @State private var showingDocumentBrowser = false
     @State private var showingImporter = false
     @State private var pendingExport: PendingExport?
@@ -21,7 +25,6 @@ struct ContentView: View {
     @State private var showingNewConfirmation = false
     @State private var replaceSourceID = PaletteSwatch.defaultPalette[0].id
     @State private var replaceTargetID = PaletteSwatch.defaultPalette[1].id
-    private let autosaveTimer = Timer.publish(every: 120, on: .main, in: .common).autoconnect()
 
     init(store: PatternStore) {
         _store = StateObject(wrappedValue: store)
@@ -154,26 +157,21 @@ struct ContentView: View {
                 }
             })
         }
-        .sheet(isPresented: $showingShareSheet) {
-            if let shareURL {
-                ShareSheet(items: [shareURL])
-            }
+        .sheet(item: $shareFile) { file in
+            ShareSheet(items: [file.url])
         }
         .onAppear {
             syncReplaceColors()
+            store.startAutosave()
+        }
+        .onDisappear {
+            store.stopAutosave()
         }
         .onChange(of: store.document.palette) {
             syncReplaceColors()
         }
         .onOpenURL { url in
             requestOpenFile(at: url)
-        }
-        .onReceive(autosaveTimer) { _ in
-            do {
-                try store.writeAutosaveCopyIfNeeded()
-            } catch {
-                store.statusMessage = "Autosave feilet: \(error.localizedDescription)"
-            }
         }
     }
 
@@ -236,8 +234,7 @@ struct ContentView: View {
     private func exportPDF() {
         do {
             let url = try PatternPDFExporter().export(document: store.document)
-            shareURL = url
-            showingShareSheet = true
+            shareFile = ShareFile(url: url)
             store.statusMessage = "PDF klar"
         } catch {
             store.statusMessage = "Kunne ikke lage PDF: \(error.localizedDescription)"
@@ -266,8 +263,7 @@ struct ContentView: View {
         do {
             let url = try store.prepareExportCopy(filename: store.document.title.stomFileName)
             logger.info("Send til — tempfil: \(url.path, privacy: .public)")
-            shareURL = url
-            showingShareSheet = true
+            shareFile = ShareFile(url: url)
         } catch {
             store.statusMessage = "Kunne ikke klargjøre deling: \(error.localizedDescription)"
         }
@@ -1761,6 +1757,7 @@ private struct DocumentListView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var files: [DocumentListItem] = []
     @State private var pendingDelete: DocumentListItem?
+    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         NavigationStack {
@@ -1820,6 +1817,9 @@ private struct DocumentListView: View {
             }
         }
         .onAppear(perform: loadFiles)
+        .onReceive(refreshTimer) { _ in
+            loadFiles()
+        }
         .alert("Slett mønster?", isPresented: Binding(
             get: { pendingDelete != nil },
             set: { if !$0 { pendingDelete = nil } }

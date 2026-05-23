@@ -78,6 +78,7 @@ final class PatternStore: ObservableObject {
     @Published var selection = Set<GridCoordinate>()
     @Published var clipboard: [GridCoordinate: UUID] = [:]
     @Published var zoom: CGFloat = 1
+    @Published private(set) var patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
     @Published var usesApplePencilForEditing = false {
         didSet {
             UserDefaults.standard.set(usesApplePencilForEditing, forKey: Self.applePencilEditingKey)
@@ -93,6 +94,7 @@ final class PatternStore: ObservableObject {
     private let decoder = JSONDecoder()
     private static let applePencilEditingKey = "no.abrahamsen.stomacher.usesApplePencilForEditing"
     private let customPalettesKey = "no.abrahamsen.stomacher.customPalettes"
+    private var autosaveTask: Task<Void, Never>?
     private var selectionAnchor: GridCoordinate?
     private var interactionPreviousCoordinate: GridCoordinate?
     private var patternMoveSnapshot: PatternMoveSnapshot?
@@ -201,9 +203,11 @@ final class PatternStore: ObservableObject {
     }
 
     func endInteraction() {
+        commitPatternMove()
         selectionAnchor = nil
         interactionPreviousCoordinate = nil
         patternMoveSnapshot = nil
+        patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
         patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
     }
 
@@ -416,11 +420,7 @@ final class PatternStore: ObservableObject {
     }
 
     var containerDocumentsURL: URL? {
-        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else { return nil }
-        let url = containerURL.appendingPathComponent("Documents", isDirectory: true)
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        logger.info("containerDocumentsURL: \(url.path, privacy: .public)")
-        return url
+        try? defaultExportDirectory().url
     }
 
     func save() throws {
@@ -461,6 +461,32 @@ final class PatternStore: ObservableObject {
         let url = directory.appendingPathComponent("autosave.stom")
         logger.info("Writing autosave copy to: \(url.path, privacy: .public)")
         try writeDocument(to: url)
+        statusMessage = "Autosave lagret"
+    }
+
+    func startAutosave() {
+        guard autosaveTask == nil else { return }
+
+        autosaveTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                self?.runAutosave()
+            }
+        }
+    }
+
+    func stopAutosave() {
+        autosaveTask?.cancel()
+        autosaveTask = nil
+    }
+
+    private func runAutosave() {
+        do {
+            try writeAutosaveCopyIfNeeded()
+        } catch {
+            statusMessage = "Autosave feilet: \(error.localizedDescription)"
+        }
     }
 
     func load(url: URL) throws {
@@ -545,6 +571,7 @@ final class PatternStore: ObservableObject {
             selection: selection
         )
         patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+        patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
         statusMessage = "Flytter mønster"
     }
 
@@ -563,14 +590,22 @@ final class PatternStore: ObservableObject {
             return
         }
 
+        patternMoveAppliedOffset = offset
+        patternMovePreviewOffset = offset
+        statusMessage = "Flyttet mønster \(offset.x), \(offset.y)"
+    }
+
+    private func commitPatternMove() {
+        guard let snapshot = patternMoveSnapshot else { return }
+        let offset = patternMovePreviewOffset
+        guard offset != GridCoordinate(x: 0, y: 0) else { return }
+
         document.cells = snapshot.cells.reduce(into: [:]) { movedCells, entry in
             movedCells[entry.key.offsetBy(x: offset.x, y: offset.y)] = entry.value
         }
         document.outlineCells = Set(snapshot.outlineCells.map { $0.offsetBy(x: offset.x, y: offset.y) })
         selection = Set(snapshot.selection.map { $0.offsetBy(x: offset.x, y: offset.y) }.filter(contains))
-        patternMoveAppliedOffset = offset
         touch()
-        statusMessage = "Flyttet mønster \(offset.x), \(offset.y)"
     }
 
     private var patternContentBounds: GridBounds? {
