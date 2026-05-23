@@ -1612,19 +1612,22 @@ private struct PatternThumbnailCanvas: View {
 
                 let x = CGFloat(coordinate.x - bounds.minX) * cellSize + offsetX
                 let y = CGFloat(coordinate.y - bounds.minY) * cellSize + offsetY
-                let rect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
-                    .insetBy(dx: cellSize * 0.1, dy: cellSize * 0.1)
+                let cellRect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
 
                 switch document.technique {
                 case .beads:
-                    context.fill(Path(ellipseIn: rect), with: .color(swatch.color))
-                case .stitches:
+                    let beadRect = cellRect.insetBy(dx: cellSize * 0.02, dy: cellSize * 0.02)
+                    context.fill(PatternCellSymbol.beadPath(in: beadRect), with: .color(swatch.color))
+                case .crossStitches:
+                    let rect = cellRect.insetBy(dx: cellSize * 0.1, dy: cellSize * 0.1)
                     var stitch = Path()
                     stitch.move(to: CGPoint(x: rect.minX, y: rect.minY))
                     stitch.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
                     stitch.move(to: CGPoint(x: rect.maxX, y: rect.minY))
                     stitch.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
                     context.stroke(stitch, with: .color(swatch.color), lineWidth: max(0.8, cellSize * 0.18))
+                case .satinStitch:
+                    context.fill(Path(cellRect), with: .color(swatch.color))
                 }
             }
         }

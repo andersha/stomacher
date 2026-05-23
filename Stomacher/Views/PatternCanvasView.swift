@@ -103,19 +103,25 @@ struct PatternCanvasView: View {
         for (coordinate, swatchID) in store.document.cells {
             guard let swatch = store.document.swatch(for: swatchID) else { continue }
             guard patternArea?.contains(coordinate) ?? true else { continue }
-            let rect = rect(for: coordinate).insetBy(dx: cellSize * 0.14, dy: cellSize * 0.14)
+            let cellRect = rect(for: coordinate)
 
             switch store.document.technique {
             case .beads:
-                context.fill(Path(ellipseIn: rect), with: .color(swatch.color))
-                context.stroke(Path(ellipseIn: rect), with: .color(.black.opacity(0.18)), lineWidth: 0.7)
-            case .stitches:
+                let beadRect = cellRect.insetBy(dx: cellSize * 0.02, dy: cellSize * 0.02)
+                let beadPath = PatternCellSymbol.beadPath(in: beadRect)
+                context.fill(beadPath, with: .color(swatch.color))
+                context.stroke(beadPath, with: .color(.black.opacity(0.22)), lineWidth: max(0.7, cellSize * 0.045))
+                context.stroke(PatternCellSymbol.beadHighlightPath(in: beadRect), with: .color(.white.opacity(0.28)), lineWidth: max(0.8, cellSize * 0.075))
+            case .crossStitches:
+                let rect = cellRect.insetBy(dx: cellSize * 0.14, dy: cellSize * 0.14)
                 var stitch = Path()
                 stitch.move(to: CGPoint(x: rect.minX, y: rect.minY))
                 stitch.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
                 stitch.move(to: CGPoint(x: rect.maxX, y: rect.minY))
                 stitch.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
                 context.stroke(stitch, with: .color(swatch.color), lineWidth: max(1.5, cellSize * 0.2))
+            case .satinStitch:
+                context.fill(Path(cellRect), with: .color(swatch.color))
             }
         }
     }
@@ -154,4 +160,51 @@ struct PatternCanvasView: View {
         CGRect(x: CGFloat(coordinate.x) * cellSize, y: CGFloat(coordinate.y) * cellSize, width: cellSize, height: cellSize)
     }
 
+}
+
+enum PatternCellSymbol {
+    static func beadPath(in rect: CGRect) -> Path {
+        var path = Path()
+        let radius = min(rect.width, rect.height) / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let point = circlePoint(center: center, radius: radius)
+
+        path.move(to: point(245))
+        for degrees in stride(from: CGFloat(250), through: 385, by: 5) {
+            path.addLine(to: point(degrees))
+        }
+        path.addLine(to: point(65))
+        for degrees in stride(from: CGFloat(70), through: 205, by: 5) {
+            path.addLine(to: point(degrees))
+        }
+        path.closeSubpath()
+
+        return path
+    }
+
+    static func beadHighlightPath(in rect: CGRect) -> Path {
+        var path = Path()
+        let point = rectPoint(in: rect)
+
+        path.move(to: point(0.28, 0.08))
+        path.addCurve(to: point(0.89, 0.67), control1: point(0.56, 0.03), control2: point(0.96, 0.30))
+
+        return path
+    }
+
+    private static func rectPoint(in rect: CGRect) -> (_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+        { x, y in
+            CGPoint(x: rect.minX + rect.width * x, y: rect.minY + rect.height * y)
+        }
+    }
+
+    private static func circlePoint(center: CGPoint, radius: CGFloat) -> (_ degrees: CGFloat) -> CGPoint {
+        { degrees in
+            let radians = degrees * .pi / 180
+            return CGPoint(
+                x: center.x + cos(radians) * radius,
+                y: center.y + sin(radians) * radius
+            )
+        }
+    }
 }

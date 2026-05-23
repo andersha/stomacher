@@ -2,21 +2,24 @@ import SwiftUI
 
 enum PatternTechnique: String, Codable, CaseIterable, Identifiable {
     case beads
-    case stitches
+    case crossStitches = "stitches"
+    case satinStitch
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .beads: "Perler"
-        case .stitches: "Masker"
+        case .crossStitches: "Korssting"
+        case .satinStitch: "Plattsøm"
         }
     }
 
     var unitTitle: String {
         switch self {
         case .beads: "perle"
-        case .stitches: "maske"
+        case .crossStitches: "korssting"
+        case .satinStitch: "plattsømsting"
         }
     }
 }
