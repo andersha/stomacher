@@ -5,17 +5,23 @@ import OSLog
 
 private let logger = Logger(subsystem: "no.abrahamsen.stomacher", category: "FileSystem")
 
+private enum PendingOpenAction {
+    case file(URL)
+    case importer
+}
+
 struct ContentView: View {
     @StateObject private var store: PatternStore
-    @State private var pdfURL: URL?
+    @State private var shareURL: URL?
     @State private var showingShareSheet = false
     @State private var showingDocumentBrowser = false
     @State private var showingImporter = false
     @State private var pendingExport: PendingExport?
+    @State private var pendingOpenAction: PendingOpenAction?
     @State private var showingNewConfirmation = false
     @State private var replaceSourceID = PaletteSwatch.defaultPalette[0].id
     @State private var replaceTargetID = PaletteSwatch.defaultPalette[1].id
-    private let autosaveTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+    private let autosaveTimer = Timer.publish(every: 120, on: .main, in: .common).autoconnect()
 
     init(store: PatternStore) {
         _store = StateObject(wrappedValue: store)
@@ -68,6 +74,12 @@ struct ContentView: View {
                         } label: {
                             Label("Lagre som...", systemImage: "folder.badge.plus")
                         }
+
+                        Button {
+                            shareDocument()
+                        } label: {
+                            Label("Send til...", systemImage: "square.and.arrow.up")
+                        }
                     } label: {
                         Label("Lagre", systemImage: "square.and.arrow.down")
                     }
@@ -77,22 +89,6 @@ struct ContentView: View {
                     } label: {
                         Label("Åpne", systemImage: "folder")
                     }
-
-                    HStack(spacing: 6) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .accessibilityHidden(true)
-
-                        Toggle("Autosave", isOn: Binding {
-                            store.autosaveEnabled
-                        } set: { isEnabled in
-                            setAutosave(isEnabled)
-                        })
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                    }
-                    .accessibilityElement(children: .combine)
-                    .accessibilityLabel("Autosave")
                 }
             }
         }
@@ -104,6 +100,22 @@ struct ContentView: View {
         } message: {
             Text("Ulagrede endringer i dette mønsteret vil gå tapt.")
         }
+        .alert("Ulagrede endringer", isPresented: Binding(
+            get: { pendingOpenAction != nil },
+            set: { if !$0 { pendingOpenAction = nil } }
+        )) {
+            Button("Avbryt", role: .cancel) {
+                pendingOpenAction = nil
+            }
+            Button("Lagre og fortsett") {
+                saveAndContinueOpening()
+            }
+            Button("Fortsett uten å lagre", role: .destructive) {
+                continueOpeningWithoutSaving()
+            }
+        } message: {
+            Text("Dette mønsteret har ulagrede endringer. Lagre før du åpner en annen fil?")
+        }
         .sheet(isPresented: $showingImporter) {
             StomacherDocumentImporter(
                 initialDirectory: store.containerDocumentsURL,
@@ -111,11 +123,7 @@ struct ContentView: View {
                     showingImporter = false
                     do {
                         let url = try result.get()
-                        let isAccessing = url.startAccessingSecurityScopedResource()
-                        defer {
-                            if isAccessing { url.stopAccessingSecurityScopedResource() }
-                        }
-                        try store.load(url: url)
+                        requestOpenFile(at: url)
                     } catch {
                         store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
                     }
@@ -134,16 +142,21 @@ struct ContentView: View {
             )
         }
         .sheet(isPresented: $showingDocumentBrowser) {
-            DocumentListView(store: store, onOpenFromOtherLocation: {
+            DocumentListView(store: store, onOpenFile: { url in
                 showingDocumentBrowser = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    showingImporter = true
+                    requestOpenFile(at: url)
+                }
+            }, onOpenFromOtherLocation: {
+                showingDocumentBrowser = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    requestOpenImporter()
                 }
             })
         }
         .sheet(isPresented: $showingShareSheet) {
-            if let pdfURL {
-                ShareSheet(items: [pdfURL])
+            if let shareURL {
+                ShareSheet(items: [shareURL])
             }
         }
         .onAppear {
@@ -152,19 +165,78 @@ struct ContentView: View {
         .onChange(of: store.document.palette) {
             syncReplaceColors()
         }
+        .onOpenURL { url in
+            requestOpenFile(at: url)
+        }
         .onReceive(autosaveTimer) { _ in
             do {
-                try store.autosaveIfNeeded()
+                try store.writeAutosaveCopyIfNeeded()
             } catch {
                 store.statusMessage = "Autosave feilet: \(error.localizedDescription)"
             }
         }
     }
 
+    private func requestOpenFile(at url: URL) {
+        requestOpen(.file(url))
+    }
+
+    private func requestOpenImporter() {
+        requestOpen(.importer)
+    }
+
+    private func requestOpen(_ action: PendingOpenAction) {
+        if store.hasUnsavedChanges {
+            pendingOpenAction = action
+        } else {
+            performOpen(action)
+        }
+    }
+
+    private func saveAndContinueOpening() {
+        guard let action = pendingOpenAction else { return }
+
+        do {
+            try store.save()
+            pendingOpenAction = nil
+            performOpen(action)
+        } catch {
+            pendingOpenAction = nil
+            store.statusMessage = "Kunne ikke lagre: \(error.localizedDescription)"
+        }
+    }
+
+    private func continueOpeningWithoutSaving() {
+        guard let action = pendingOpenAction else { return }
+        pendingOpenAction = nil
+        performOpen(action)
+    }
+
+    private func performOpen(_ action: PendingOpenAction) {
+        switch action {
+        case .file(let url):
+            openFile(at: url)
+        case .importer:
+            showingImporter = true
+        }
+    }
+
+    private func openFile(at url: URL) {
+        do {
+            let isAccessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if isAccessing { url.stopAccessingSecurityScopedResource() }
+            }
+            try store.load(url: url)
+        } catch {
+            store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
+        }
+    }
+
     private func exportPDF() {
         do {
             let url = try PatternPDFExporter().export(document: store.document)
-            pdfURL = url
+            shareURL = url
             showingShareSheet = true
             store.statusMessage = "PDF klar"
         } catch {
@@ -180,27 +252,6 @@ struct ContentView: View {
         }
     }
 
-    private func setAutosave(_ isEnabled: Bool) {
-        if isEnabled {
-            guard store.canAutosave else {
-                do {
-                    try store.save()
-                    store.autosaveEnabled = true
-                    store.statusMessage = "Autosave på"
-                } catch {
-                    store.statusMessage = "Kunne ikke lagre: \(error.localizedDescription)"
-                }
-                return
-            }
-
-            store.autosaveEnabled = true
-            store.statusMessage = "Autosave på"
-        } else {
-            store.autosaveEnabled = false
-            store.statusMessage = "Autosave av"
-        }
-    }
-
     private func presentExporter() {
         do {
             let url = try store.prepareExportCopy(filename: store.document.title.stomFileName)
@@ -208,6 +259,17 @@ struct ContentView: View {
             pendingExport = PendingExport(url: url, initialDirectory: store.containerDocumentsURL)
         } catch {
             store.statusMessage = "Kunne ikke klargjøre lagring: \(error.localizedDescription)"
+        }
+    }
+
+    private func shareDocument() {
+        do {
+            let url = try store.prepareExportCopy(filename: store.document.title.stomFileName)
+            logger.info("Send til — tempfil: \(url.path, privacy: .public)")
+            shareURL = url
+            showingShareSheet = true
+        } catch {
+            store.statusMessage = "Kunne ikke klargjøre deling: \(error.localizedDescription)"
         }
     }
 
@@ -1579,9 +1641,6 @@ private struct StatusBar: View {
                 Text("x \(coordinate.x), y \(coordinate.y)")
                     .monospacedDigit()
             }
-            if store.autosaveEnabled {
-                Text("Autosave")
-            }
             if supportsApplePencilEditing && store.usesApplePencilForEditing {
                 Text("Pencil")
             }
@@ -1696,6 +1755,7 @@ private struct DocumentListItem: Identifiable {
 
 private struct DocumentListView: View {
     @ObservedObject var store: PatternStore
+    var onOpenFile: (URL) -> Void
     var onOpenFromOtherLocation: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -1775,14 +1835,7 @@ private struct DocumentListView: View {
     }
 
     private func openFile(_ file: DocumentListItem) {
-        dismiss()
-        do {
-            let isAccessing = file.url.startAccessingSecurityScopedResource()
-            defer { if isAccessing { file.url.stopAccessingSecurityScopedResource() } }
-            try store.load(url: file.url)
-        } catch {
-            store.statusMessage = "Kunne ikke åpne: \(error.localizedDescription)"
-        }
+        onOpenFile(file.url)
     }
 
     private func deleteFile(_ file: DocumentListItem) {

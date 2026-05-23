@@ -22,6 +22,10 @@ struct GridBounds: Equatable {
 }
 
 struct PatternDocument: Codable, Identifiable {
+    static let oldestSupportedFileFormatVersion = 1
+    static let currentFileFormatVersion = 1
+
+    var fileFormatVersion: Int
     var id: UUID
     var title: String
     var technique: PatternTechnique
@@ -38,6 +42,7 @@ struct PatternDocument: Codable, Identifiable {
     var updatedAt: Date
 
     enum CodingKeys: String, CodingKey {
+        case fileFormatVersion
         case id
         case title
         case technique
@@ -55,6 +60,7 @@ struct PatternDocument: Codable, Identifiable {
     }
 
     init(
+        fileFormatVersion: Int = Self.currentFileFormatVersion,
         id: UUID = UUID(),
         title: String = "Ny bringeduk",
         technique: PatternTechnique = .beads,
@@ -70,6 +76,7 @@ struct PatternDocument: Codable, Identifiable {
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
+        self.fileFormatVersion = fileFormatVersion
         self.id = id
         self.title = title
         self.technique = technique
@@ -88,6 +95,16 @@ struct PatternDocument: Codable, Identifiable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        fileFormatVersion = try container.decodeIfPresent(Int.self, forKey: .fileFormatVersion) ?? 1
+
+        guard (Self.oldestSupportedFileFormatVersion...Self.currentFileFormatVersion).contains(fileFormatVersion) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .fileFormatVersion,
+                in: container,
+                debugDescription: "Unsupported .stom file format version \(fileFormatVersion). This app supports versions \(Self.oldestSupportedFileFormatVersion)-\(Self.currentFileFormatVersion)."
+            )
+        }
+
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
         technique = try container.decode(PatternTechnique.self, forKey: .technique)
@@ -106,6 +123,7 @@ struct PatternDocument: Codable, Identifiable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(Self.currentFileFormatVersion, forKey: .fileFormatVersion)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
         try container.encode(technique, forKey: .technique)

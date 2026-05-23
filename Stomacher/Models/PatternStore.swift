@@ -86,7 +86,6 @@ final class PatternStore: ObservableObject {
     @Published var lastTouchedCoordinate: GridCoordinate?
     @Published var statusMessage = "Klar"
     @Published var hasUnsavedChanges = false
-    @Published var autosaveEnabled = false
     @Published private(set) var customPalettes: [PatternPalette] = []
     @Published private(set) var currentDocumentURL: URL?
 
@@ -416,10 +415,6 @@ final class PatternStore: ObservableObject {
         statusMessage = "Endret arbeidsflate"
     }
 
-    var canAutosave: Bool {
-        currentDocumentURL != nil
-    }
-
     var containerDocumentsURL: URL? {
         guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else { return nil }
         let url = containerURL.appendingPathComponent("Documents", isDirectory: true)
@@ -459,10 +454,13 @@ final class PatternStore: ObservableObject {
         return url
     }
 
-    func autosaveIfNeeded() throws {
-        guard autosaveEnabled, hasUnsavedChanges, let currentDocumentURL else { return }
-        try writeDocument(to: currentDocumentURL)
-        markSaved(to: currentDocumentURL, message: "Autosave lagret")
+    func writeAutosaveCopyIfNeeded() throws {
+        guard hasUnsavedChanges else { return }
+
+        let directory = try defaultExportDirectory().url
+        let url = directory.appendingPathComponent("autosave.stom")
+        logger.info("Writing autosave copy to: \(url.path, privacy: .public)")
+        try writeDocument(to: url)
     }
 
     func load(url: URL) throws {
@@ -485,7 +483,6 @@ final class PatternStore: ObservableObject {
         selection.removeAll()
         clipboard.removeAll()
         currentDocumentURL = nil
-        autosaveEnabled = false
         statusMessage = "Ny arbeidsflate"
         hasUnsavedChanges = false
     }
