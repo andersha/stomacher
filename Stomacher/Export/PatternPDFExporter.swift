@@ -94,28 +94,42 @@ struct PatternPDFExporter {
         for (coordinate, swatchID) in document.cells {
             guard patternArea?.contains(coordinate) ?? true else { continue }
             guard let swatch = document.swatch(for: swatchID) else { continue }
-            UIColor(hex: swatch.hex).setFill()
             let cell = CGRect(
                 x: origin.x + CGFloat(coordinate.x) * scale,
                 y: origin.y + CGFloat(coordinate.y) * scale,
                 width: max(0.5, scale),
                 height: max(0.5, scale)
             )
-            UIBezierPath(rect: cell).fill()
+            drawPatternCell(technique: document.technique, swatch: swatch, in: cell)
+        }
+
+        drawOverviewOutline(document: document, patternArea: patternArea, origin: origin, scale: scale)
+    }
+
+    private func drawOverviewOutline(document: PatternDocument, patternArea: Set<GridCoordinate>?, origin: CGPoint, scale: CGFloat) {
+        guard document.hasCustomOutline else { return }
+
+        let path = UIBezierPath()
+
+        if let patternArea {
+            for coordinate in document.outlineCells {
+                addExteriorOutlineSegments(to: path, for: coordinate, patternArea: patternArea, origin: origin, startX: 0, startY: 0, cellSize: scale)
+            }
+        } else {
+            for coordinate in document.outlineCells {
+                let cell = CGRect(
+                    x: origin.x + CGFloat(coordinate.x) * scale,
+                    y: origin.y + CGFloat(coordinate.y) * scale,
+                    width: max(0.5, scale),
+                    height: max(0.5, scale)
+                )
+                path.append(UIBezierPath(rect: cell))
+            }
         }
 
         UIColor.systemRed.setStroke()
-        for coordinate in document.outlineCells {
-            let cell = CGRect(
-                x: origin.x + CGFloat(coordinate.x) * scale,
-                y: origin.y + CGFloat(coordinate.y) * scale,
-                width: max(0.5, scale),
-                height: max(0.5, scale)
-            )
-            let path = UIBezierPath(rect: cell)
-            path.lineWidth = max(0.8, scale * 0.18)
-            path.stroke()
-        }
+        path.lineWidth = max(0.8, scale * 0.18)
+        path.stroke()
     }
 
     private func drawPatternPages(document: PatternDocument, context: UIGraphicsPDFRendererContext) {
@@ -215,7 +229,7 @@ struct PatternPDFExporter {
             majorEvery: document.gridBlockSize,
             patternArea: document.hideUnusedArea ? patternArea : nil
         )
-        drawOutline(document: document, origin: origin, startX: startX, startY: startY, visibleWidth: visibleWidth, visibleHeight: visibleHeight, cellSize: cellSize)
+        drawOutline(document: document, patternArea: patternArea, origin: origin, startX: startX, startY: startY, visibleWidth: visibleWidth, visibleHeight: visibleHeight, cellSize: cellSize)
 
         let footer = "Kolonner \(startX)-\(endX - 1), rader \(startY)-\(endY - 1)"
         footer.draw(at: CGPoint(x: margin, y: pageRect.height - 32), withAttributes: [
@@ -236,8 +250,93 @@ struct PatternPDFExporter {
         )
     }
 
-    private func drawOutline(document: PatternDocument, origin: CGPoint, startX: Int, startY: Int, visibleWidth: Int, visibleHeight: Int, cellSize: CGFloat) {
+    private func drawPatternCell(technique: PatternTechnique, swatch: PaletteSwatch, in rect: CGRect) {
+        let swatchColor = UIColor(hex: swatch.hex)
+
+        switch technique {
+        case .beads:
+            let beadRect = rect.insetBy(dx: rect.width * 0.07, dy: rect.height * 0.07)
+            let beadPath = beadPath(in: beadRect)
+            swatchColor.setFill()
+            beadPath.fill()
+
+            let highlightPath = beadHighlightPath(in: beadRect)
+            UIColor.white.withAlphaComponent(0.28).setStroke()
+            highlightPath.lineWidth = max(0.8, rect.width * 0.075)
+            highlightPath.stroke()
+
+        case .crossStitches:
+            let stitchRect = rect.insetBy(dx: rect.width * 0.14, dy: rect.height * 0.14)
+            let stitch = UIBezierPath()
+            stitch.move(to: CGPoint(x: stitchRect.minX, y: stitchRect.minY))
+            stitch.addLine(to: CGPoint(x: stitchRect.maxX, y: stitchRect.maxY))
+            stitch.move(to: CGPoint(x: stitchRect.maxX, y: stitchRect.minY))
+            stitch.addLine(to: CGPoint(x: stitchRect.minX, y: stitchRect.maxY))
+            swatchColor.setStroke()
+            stitch.lineWidth = max(1.5, rect.width * 0.2)
+            stitch.stroke()
+
+        case .satinStitch:
+            swatchColor.setFill()
+            UIBezierPath(rect: rect).fill()
+        }
+    }
+
+    private func beadPath(in rect: CGRect) -> UIBezierPath {
+        let path = UIBezierPath()
+        let radius = min(rect.width, rect.height) / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+
+        path.move(to: circlePoint(center: center, radius: radius, degrees: 245))
+        for degrees in stride(from: CGFloat(250), through: CGFloat(385), by: CGFloat(5)) {
+            path.addLine(to: circlePoint(center: center, radius: radius, degrees: degrees))
+        }
+        path.addLine(to: circlePoint(center: center, radius: radius, degrees: 65))
+        for degrees in stride(from: CGFloat(70), through: CGFloat(205), by: CGFloat(5)) {
+            path.addLine(to: circlePoint(center: center, radius: radius, degrees: degrees))
+        }
+        path.close()
+
+        return path
+    }
+
+    private func beadHighlightPath(in rect: CGRect) -> UIBezierPath {
+        let path = UIBezierPath()
+
+        path.move(to: CGPoint(x: rect.minX + rect.width * 0.28, y: rect.minY + rect.height * 0.08))
+        path.addCurve(
+            to: CGPoint(x: rect.minX + rect.width * 0.89, y: rect.minY + rect.height * 0.67),
+            controlPoint1: CGPoint(x: rect.minX + rect.width * 0.56, y: rect.minY + rect.height * 0.03),
+            controlPoint2: CGPoint(x: rect.minX + rect.width * 0.96, y: rect.minY + rect.height * 0.30)
+        )
+
+        return path
+    }
+
+    private func circlePoint(center: CGPoint, radius: CGFloat, degrees: CGFloat) -> CGPoint {
+        let radians = degrees * .pi / 180
+        return CGPoint(
+            x: center.x + cos(radians) * radius,
+            y: center.y + sin(radians) * radius
+        )
+    }
+
+    private func drawOutline(document: PatternDocument, patternArea: Set<GridCoordinate>?, origin: CGPoint, startX: Int, startY: Int, visibleWidth: Int, visibleHeight: Int, cellSize: CGFloat) {
         guard document.hasCustomOutline else { return }
+
+        if let patternArea {
+            let path = UIBezierPath()
+            for coordinate in document.outlineCells {
+                guard coordinate.x >= startX, coordinate.x < startX + visibleWidth else { continue }
+                guard coordinate.y >= startY, coordinate.y < startY + visibleHeight else { continue }
+                addExteriorOutlineSegments(to: path, for: coordinate, patternArea: patternArea, origin: origin, startX: startX, startY: startY, cellSize: cellSize)
+            }
+
+            UIColor.systemRed.setStroke()
+            path.lineWidth = max(1.2, cellSize * 0.14)
+            path.stroke()
+            return
+        }
 
         UIColor.systemRed.setStroke()
         for coordinate in document.outlineCells {
@@ -253,6 +352,32 @@ struct PatternPDFExporter {
             let path = UIBezierPath(rect: rect)
             path.lineWidth = max(1.2, cellSize * 0.14)
             path.stroke()
+        }
+    }
+
+    private func addExteriorOutlineSegments(to path: UIBezierPath, for coordinate: GridCoordinate, patternArea: Set<GridCoordinate>, origin: CGPoint, startX: Int, startY: Int, cellSize: CGFloat) {
+        let rect = CGRect(
+            x: origin.x + CGFloat(coordinate.x - startX) * cellSize,
+            y: origin.y + CGFloat(coordinate.y - startY) * cellSize,
+            width: cellSize,
+            height: cellSize
+        )
+
+        if !patternArea.contains(coordinate.offsetBy(x: 0, y: -1)) {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: 1, y: 0)) {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: 0, y: 1)) {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: -1, y: 0)) {
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
         }
     }
 

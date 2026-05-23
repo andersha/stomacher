@@ -1624,7 +1624,7 @@ private struct PatternThumbnailCanvas: View {
 
                 switch document.technique {
                 case .beads:
-                    let beadRect = cellRect.insetBy(dx: cellSize * 0.02, dy: cellSize * 0.02)
+                    let beadRect = cellRect.insetBy(dx: cellSize * 0.07, dy: cellSize * 0.07)
                     context.fill(PatternCellSymbol.beadPath(in: beadRect), with: .color(swatch.color))
                 case .crossStitches:
                     let rect = cellRect.insetBy(dx: cellSize * 0.1, dy: cellSize * 0.1)

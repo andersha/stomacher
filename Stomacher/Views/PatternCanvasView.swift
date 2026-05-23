@@ -108,7 +108,7 @@ struct PatternCanvasView: View {
 
             switch store.document.technique {
             case .beads:
-                let beadRect = cellRect.insetBy(dx: cellSize * 0.02, dy: cellSize * 0.02)
+                let beadRect = cellRect.insetBy(dx: cellSize * 0.07, dy: cellSize * 0.07)
                 let beadPath = PatternCellSymbol.beadPath(in: beadRect)
                 context.fill(beadPath, with: .color(swatch.color))
                 context.stroke(beadPath, with: .color(.black.opacity(0.22)), lineWidth: max(0.7, cellSize * 0.045))
@@ -155,11 +155,42 @@ struct PatternCanvasView: View {
 
     private func drawOutline(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?) {
         guard store.document.hasCustomOutline else { return }
-        let outlineColor: Color = patternArea == nil ? .orange : .red
+
+        if let patternArea {
+            var outline = Path()
+
+            for coordinate in store.document.outlineCells {
+                addExteriorOutlineSegments(to: &outline, for: coordinate, patternArea: patternArea)
+            }
+
+            context.stroke(outline, with: .color(.red), lineWidth: max(2, cellSize * 0.16))
+            return
+        }
 
         for coordinate in store.document.outlineCells {
             let rect = rect(for: coordinate).insetBy(dx: max(1, cellSize * 0.08), dy: max(1, cellSize * 0.08))
-            context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(outlineColor), lineWidth: max(2, cellSize * 0.16))
+            context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(.orange), lineWidth: max(2, cellSize * 0.16))
+        }
+    }
+
+    private func addExteriorOutlineSegments(to path: inout Path, for coordinate: GridCoordinate, patternArea: Set<GridCoordinate>) {
+        let rect = rect(for: coordinate)
+
+        if !patternArea.contains(coordinate.offsetBy(x: 0, y: -1)) {
+            path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: 1, y: 0)) {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: 0, y: 1)) {
+            path.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        }
+        if !patternArea.contains(coordinate.offsetBy(x: -1, y: 0)) {
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
         }
     }
 
