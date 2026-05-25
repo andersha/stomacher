@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var shareFile: ShareFile?
     @State private var showingDocumentBrowser = false
     @State private var showingImporter = false
+    @State private var showingHelp = false
     @State private var pendingExport: PendingExport?
     @State private var pendingOpenAction: PendingOpenAction?
     @State private var showingNewConfirmation = false
@@ -107,6 +108,12 @@ struct ContentView: View {
                     } label: {
                         Label("Åpne", systemImage: "folder")
                     }
+
+                    Button {
+                        showingHelp = true
+                    } label: {
+                        Label("Hjelp", systemImage: "questionmark.circle")
+                    }
                 }
             }
         }
@@ -174,6 +181,10 @@ struct ContentView: View {
         }
         .sheet(item: $shareFile) { file in
             ShareSheet(items: [file.url])
+        }
+        .fullScreenCover(isPresented: $showingHelp) {
+            HelpOverlayView()
+                .presentationBackground(.clear)
         }
         .onAppear {
             syncReplaceColors()
@@ -339,6 +350,165 @@ struct ContentView: View {
     }
 }
 
+private struct HelpOverlayView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.24)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Label("Hjelp", systemImage: "questionmark.circle")
+                        .font(.title2.weight(.semibold))
+
+                    Spacer()
+
+                    Button {
+                        dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.semibold))
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Lukk hjelp")
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+
+                Divider()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HelpSection(title: "Hva appen gjør") {
+                            HelpParagraph("Bringeduk er en tegneflate for å bygge bringedukmønstre på et rutenett. Hver utfylte rute får en farge fra paletten og vises som perle, korssting eller plattsøm, avhengig av teknikkvalget. Mønsteret kan lagres som .stom-fil, åpnes igjen senere og eksporteres som en profesjonell PDF med farger, symboler og sideinndelt rutenett.")
+                        }
+
+                        HelpSection(title: "Toppknapper") {
+                            HelpItem(systemImage: "minus.magnifyingglass", title: "Zoom", text: "Bruk minus, pluss og 100 % for å zoome arbeidsflaten. Du kan også klype på lerretet.")
+                            HelpItem(systemImage: "doc.badge.plus", title: "Ny", text: "Starter et nytt mønster. Hvis gjeldende mønster har ulagrede endringer, blir du bedt om å bekrefte først.")
+                            HelpItem(systemImage: "square.and.arrow.down", title: "Lagre", text: "Lagrer til valgt .stom-fil. Menyen inneholder også Lagre som for ny plassering og Send til for deling.")
+                            HelpItem(systemImage: "folder", title: "Åpne", text: "Viser lagrede mønstre med forhåndsvisning. Fra annet sted åpner en .stom-fil via filvelgeren.")
+                        }
+
+                        HelpSection(title: "Dokument") {
+                            HelpItem(systemImage: "textformat", title: "Navn", text: "Endrer mønsternavnet som brukes ved lagring, eksport og visning i dokumentlisten.")
+                            HelpItem(systemImage: "rectangle.expand.vertical", title: "Bredde og høyde", text: "Endrer antall ruter i arbeidsflaten. Hvis en mindre størrelse fjerner tegnede ruter, får du en advarsel først.")
+                            HelpItem(systemImage: "square.grid.3x3", title: "Ruteblokk", text: "Bestemmer avstanden mellom kraftigere hjelpelinjer, for eksempel hver 10. rute.")
+                            HelpItem(systemImage: "shield", title: "Beskytt", text: "Låser mønsteret mot redigering. Bruk dette når tegningen er klar for lesing eller sy-modus.")
+                        }
+
+                        HelpSection(title: "Verktøy") {
+                            HelpItem(systemImage: "applepencil", title: "Apple Pencil", text: "På iPad kan du la Apple Pencil redigere mønsteret mens fingrene brukes til flytting og zoom. Double-tap på Pencil bytter mellom Tegn og Visk.")
+                            HelpItem(systemImage: "lock", title: "Autolås", text: "Når autolås er av, holder appen skjermen våken mens den er aktiv. Det er nyttig ved sying fra skjerm.")
+                            HelpItem(systemImage: "hand.raised", title: "Flytt", text: "Flytter arbeidsflaten. Velg Ark for vanlig panorering, eller Mønster for å skyve selve innholdet i rutenettet.")
+                            HelpItem(systemImage: "paintbrush.pointed", title: "Tegn", text: "Fyller ruter med valgt palettfarge. Tegning utenfor en lukket ytterkant blir stoppet.")
+                            HelpItem(systemImage: "eraser", title: "Visk", text: "Fjerner farge fra ruter. Hvis du visker på en ytterkant, fjernes også ytterkantruten.")
+                            HelpItem(systemImage: "lasso", title: "Ytterkant", text: "Tegner mønsterets aktive grense. Når kanten er lukket, brukes området innenfor som mønsterflate.")
+                            HelpItem(systemImage: "selection.pin.in.out", title: "Marker", text: "Markerer ruter for kopiering og transformasjon. Bruk Rektangel for et område, eller Enkeltruter for å bygge markeringen rute for rute.")
+                            HelpItem(systemImage: "eyedropper", title: "Pipette", text: "Trykk en utfylt rute for å velge samme farge i paletten og gå tilbake til Tegn.")
+                            HelpItem(systemImage: "arrow.triangle.2.circlepath", title: "Bytt farge", text: "Velg Fra- og Til-farge i verktøypanelet, og bytt alle forekomster i hele mønsteret.")
+                        }
+
+                        HelpSection(title: "Markering") {
+                            HelpItem(systemImage: "doc.on.doc", title: "Kopier", text: "Kopierer markerte, utfylte ruter til intern utklippstavle.")
+                            HelpItem(systemImage: "scissors", title: "Klipp ut", text: "Kopierer markeringen og fjerner de markerte rutene fra mønsteret.")
+                            HelpItem(systemImage: "doc.on.clipboard", title: "Lim inn", text: "Setter inn kopierte ruter ved siste berørte rute, eller omtrent midt på arbeidsflaten hvis ingen rute er valgt.")
+                            HelpItem(systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right", title: "Speil horisontalt", text: "Speiler markeringen fra venstre til høyre innenfor markeringens yttergrenser.")
+                            HelpItem(systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down", title: "Speil vertikalt", text: "Speiler markeringen opp og ned innenfor markeringens yttergrenser.")
+                            HelpItem(systemImage: "rotate.right", title: "Roter 90°", text: "Roterer de markerte, utfylte rutene 90 grader med klokken.")
+                            HelpItem(systemImage: "square.grid.2x2", title: "Lag kvadrat av 1/4", text: "Bruker markert kvart mønster som utgangspunkt og speiler det til et fullt kvadrat.")
+                            HelpItem(systemImage: "xmark.circle", title: "Fjern markering", text: "Tømmer markeringen uten å slette rutene i mønsteret.")
+                        }
+
+                        HelpSection(title: "Palett og teknikk") {
+                            HelpItem(systemImage: "paintpalette", title: "Palett", text: "Velg innebygde eller egne paletter. Trykk en fargebrikke for å velge tegnefarge og gå til Tegn.")
+                            HelpItem(systemImage: "pencil", title: "Rediger palett", text: "Lag en egendefinert palett fra gjeldende palett. Du kan justere HEX, RGB, HSL, HSV og CMYK, velge nabofarger eller søke i DMC-farger.")
+                            HelpItem(systemImage: "trash", title: "Slett egendefinert palett", text: "Fjerner valgt egendefinert palett. Innebygde paletter kan ikke slettes.")
+                            HelpItem(systemImage: "circle.grid.cross", title: "Teknikk", text: "Velg om rutene skal tegnes og eksporteres som perler, korssting eller plattsøm. Antall utfylte felt vises under valget.")
+                        }
+
+                        HelpSection(title: "Ytterkant, sying og utskrift") {
+                            HelpItem(systemImage: "square.dashed", title: "Skjul ubrukt område", text: "Når en lukket ytterkant finnes, kan området utenfor skjules i arbeidsflaten og holdes utenfor PDF-visningen.")
+                            HelpItem(systemImage: "xmark.diamond", title: "Fjern ytterkant", text: "Sletter hele den egendefinerte ytterkanten. Da brukes hele rutenettet igjen som aktivt mønsterområde.")
+                            HelpItem(systemImage: "scissors", title: "Sy", text: "Når mønsteret er beskyttet kan du starte sying fra et hjørne. Appen markerer nåværende rute, gråer ut passerte ruter og lar deg gå til neste rute eller neste linje.")
+                            HelpItem(systemImage: "printer", title: "Eksporter profesjonell PDF", text: "Lager en PDF med forside, fargekart, symbolforklaring, oversikt og sideinndelt mønsterrutenett.")
+                        }
+                    }
+                    .padding(20)
+                }
+            }
+            .frame(maxWidth: 940, maxHeight: .infinity)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.primary.opacity(0.08))
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+        }
+    }
+}
+
+private struct HelpSection<Content: View>: View {
+    var title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 10) {
+                content
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct HelpParagraph: View {
+    var text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct HelpItem: View {
+    var systemImage: String
+    var title: String
+    var text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: systemImage)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(text)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var store: PatternStore
     @Binding var replaceSourceID: UUID
@@ -393,7 +563,7 @@ private struct InspectorView: View {
                 } set: { newValue in
                     store.updateProtected(newValue)
                 }) {
-                    Label("Beskytt", systemImage: store.document.isProtected ? "lock.fill" : "lock.open")
+                    Label("Beskytt", systemImage: store.document.isProtected ? "shield.fill" : "shield")
                 }
             }
 
