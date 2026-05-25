@@ -2,6 +2,7 @@
 
 - Dette er en SwiftUI-prototype for å tegne bringeduk-mønstre på et rutenett.
 - Følg eksisterende SwiftUI-/modellstruktur: visninger i `Stomacher/Views`, dokument- og appstate i `Stomacher/Models`, PDF-eksport i `Stomacher/Export`.
+- Appen har en hjelpefunksjon i UI-et. Når funksjoner, verktøy eller arbeidsflyter legges til, endres eller fjernes, skal hjelpeteksten oppdateres samtidig.
 - Prosjektet bruker XcodeGen. Regenerer prosjektet med `xcodegen generate` bare når prosjektoppsettet endres.
 - Verifiser i Codex/sandbox med generisk iOS-build, ikke CoreSimulator:
 
