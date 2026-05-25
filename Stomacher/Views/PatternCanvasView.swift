@@ -31,6 +31,8 @@ struct PatternCanvasView: View {
         let patternArea = store.document.activePatternArea()
         let patternOffset = store.patternMovePreviewOffset
         let colorBySwatchID = Dictionary(uniqueKeysWithValues: store.document.palette.map { ($0.id, $0.color) })
+        let sewingPassedCells = store.sewingPassedCells
+        let sewingCurrentCoordinate = store.sewingCurrentCoordinate
 
         ScrollView([.horizontal, .vertical]) {
             ZStack(alignment: .topLeading) {
@@ -38,10 +40,12 @@ struct PatternCanvasView: View {
                     drawBackground(in: &context, size: size)
                     drawOutsidePatternArea(in: &context, patternArea: patternArea, offset: patternOffset)
                     drawCells(in: &context, patternArea: patternArea, offset: patternOffset, colorBySwatchID: colorBySwatchID)
+                    drawSewingProgress(in: &context, passedCells: sewingPassedCells, offset: patternOffset)
                     drawGrid(in: &context)
                     drawHiddenUnusedArea(in: &context, patternArea: patternArea, offset: patternOffset)
                     drawOutline(in: &context, patternArea: patternArea, offset: patternOffset)
                     drawSelection(in: &context, offset: patternOffset)
+                    drawSewingCurrent(in: &context, currentCoordinate: sewingCurrentCoordinate, offset: patternOffset)
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .background(canvasBackground)
@@ -49,10 +53,17 @@ struct PatternCanvasView: View {
                 DrawInputOverlay(
                     store: store,
                     cellSize: cellSize,
-                    isEnabled: store.tool != .hand || store.moveMode == .pattern,
-                    usesApplePencilOnly: supportsApplePencilEditing && store.usesApplePencilForEditing
+                    isEnabled: isDrawInputEnabled,
+                    usesApplePencilOnly: usesPencilOnlyInput
                 )
                 .frame(width: canvasSize.width, height: canvasSize.height)
+
+                SewingAutoScrollView(
+                    coordinate: sewingCurrentCoordinate,
+                    cellSize: cellSize,
+                    contentPadding: 24
+                )
+                .frame(width: 1, height: 1)
             }
             .padding(24)
         }
@@ -69,6 +80,18 @@ struct PatternCanvasView: View {
                     pinchStartZoom = nil
                 }
         )
+    }
+
+    private var isDrawInputEnabled: Bool {
+        if store.document.isProtected {
+            return supportsApplePencilEditing && store.usesApplePencilForEditing && store.document.sewingProgress != nil
+        }
+
+        return store.tool != .hand || store.moveMode == .pattern
+    }
+
+    private var usesPencilOnlyInput: Bool {
+        supportsApplePencilEditing && (store.usesApplePencilForEditing || store.document.isProtected)
     }
 
     private func drawBackground(in context: inout GraphicsContext, size: CGSize) {
@@ -219,6 +242,29 @@ struct PatternCanvasView: View {
         }
     }
 
+    private func drawSewingProgress(
+        in context: inout GraphicsContext,
+        passedCells: Set<GridCoordinate>,
+        offset: GridCoordinate
+    ) {
+        guard !passedCells.isEmpty else { return }
+
+        var passedPath = Path()
+        for coordinate in passedCells {
+            let displayCoordinate = coordinate.offsetBy(x: offset.x, y: offset.y)
+            passedPath.addRect(rect(for: displayCoordinate))
+        }
+        context.fill(passedPath, with: .color(Color.gray.opacity(0.72)))
+    }
+
+    private func drawSewingCurrent(in context: inout GraphicsContext, currentCoordinate: GridCoordinate?, offset: GridCoordinate) {
+        guard let currentCoordinate else { return }
+        let displayCoordinate = currentCoordinate.offsetBy(x: offset.x, y: offset.y)
+        let rect = rect(for: displayCoordinate).insetBy(dx: 1, dy: 1)
+        let lineWidth = max(1, min(2, cellSize * 0.055))
+        context.stroke(Path(rect), with: .color(.yellow), lineWidth: lineWidth)
+    }
+
     private func addExteriorOutlineSegments(to path: inout Path, for coordinate: GridCoordinate, displayCoordinate: GridCoordinate, patternArea: Set<GridCoordinate>) {
         let rect = rect(for: displayCoordinate)
 
@@ -252,6 +298,63 @@ struct PatternCanvasView: View {
         CGRect(x: CGFloat(coordinate.x) * cellSize, y: CGFloat(coordinate.y) * cellSize, width: cellSize, height: cellSize)
     }
 
+}
+
+private struct SewingAutoScrollView: UIViewRepresentable {
+    var coordinate: GridCoordinate?
+    var cellSize: CGFloat
+    var contentPadding: CGFloat
+
+    func makeUIView(context: Context) -> UIView {
+        UIView(frame: .zero)
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard let coordinate else { return }
+        scroll(to: coordinate, from: uiView, animated: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            scroll(to: coordinate, from: uiView, animated: true)
+        }
+    }
+
+    private func scroll(to coordinate: GridCoordinate, from view: UIView, animated: Bool) {
+        guard let scrollView = view.enclosingScrollView else { return }
+
+        let targetCenter = CGPoint(
+            x: contentPadding + CGFloat(coordinate.x) * cellSize + cellSize / 2,
+            y: contentPadding + CGFloat(coordinate.y) * cellSize + cellSize / 2
+        )
+        let desiredOffset = CGPoint(
+            x: targetCenter.x - scrollView.bounds.width / 2,
+            y: targetCenter.y - scrollView.bounds.height / 2
+        )
+
+        let inset = scrollView.adjustedContentInset
+        let minOffset = CGPoint(x: -inset.left, y: -inset.top)
+        let maxOffset = CGPoint(
+            x: max(minOffset.x, scrollView.contentSize.width - scrollView.bounds.width + inset.right),
+            y: max(minOffset.y, scrollView.contentSize.height - scrollView.bounds.height + inset.bottom)
+        )
+        let clampedOffset = CGPoint(
+            x: min(max(desiredOffset.x, minOffset.x), maxOffset.x),
+            y: min(max(desiredOffset.y, minOffset.y), maxOffset.y)
+        )
+
+        scrollView.setContentOffset(clampedOffset, animated: animated)
+    }
+}
+
+private extension UIView {
+    var enclosingScrollView: UIScrollView? {
+        var current = superview
+        while let view = current {
+            if let scrollView = view as? UIScrollView {
+                return scrollView
+            }
+            current = view.superview
+        }
+        return nil
+    }
 }
 
 private struct CellSymbolTemplates {

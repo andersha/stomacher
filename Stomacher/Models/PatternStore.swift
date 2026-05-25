@@ -147,27 +147,130 @@ final class PatternStore: ObservableObject {
         stomacherDocumentsDirectory.appendingPathComponent("bringeduk-\(document.id.uuidString).stom")
     }
 
+    var sewingCurrentCoordinate: GridCoordinate? {
+        guard document.isProtected else { return nil }
+        return document.sewingProgress?.current
+    }
+
+    var sewingPassedCells: Set<GridCoordinate> {
+        guard document.isProtected, let progress = document.sewingProgress else { return [] }
+        let traversal = document.sewingTraversal(from: progress.startCorner)
+        guard let currentIndex = traversal.firstIndex(of: progress.current), currentIndex > 0 else { return [] }
+        return Set(traversal[..<currentIndex])
+    }
+
+    var canAdvanceSewingCell: Bool {
+        nextSewingCell() != nil
+    }
+
+    var canAdvanceSewingLine: Bool {
+        nextSewingLineStart() != nil
+    }
+
     func updateTitle(_ title: String) {
+        guard canEditPattern else { return }
         document.title = title
         touch()
     }
 
     func updateTechnique(_ technique: PatternTechnique) {
+        guard canEditPattern else { return }
         document.technique = technique
         touch()
     }
 
     func updateGridBlockSize(_ gridBlockSize: Int) {
+        guard canEditPattern else { return }
         document.gridBlockSize = PatternDocument.normalizedGridBlockSize(gridBlockSize)
         touch()
     }
 
     func updateHideUnusedArea(_ hideUnusedArea: Bool) {
+        guard canEditPattern else { return }
         document.hideUnusedArea = hideUnusedArea
         touch()
     }
 
+    func updateProtected(_ isProtected: Bool) {
+        guard document.isProtected != isProtected else { return }
+        document.isProtected = isProtected
+        if isProtected {
+            tool = .hand
+            moveMode = .sheet
+            selection.removeAll()
+            statusMessage = "Mønsteret er beskyttet"
+        } else {
+            statusMessage = "Beskyttelse er slått av"
+        }
+        touch()
+    }
+
+    func startSewing(from startCorner: SewingStartCorner) {
+        guard document.isProtected else { return }
+        guard let current = document.sewingTraversal(from: startCorner).first else {
+            statusMessage = "Ingen ruter å sy"
+            return
+        }
+
+        document.sewingProgress = SewingProgress(startCorner: startCorner, current: current)
+        tool = .hand
+        moveMode = .sheet
+        selection.removeAll()
+        zoom = 2.4
+        touch()
+        statusMessage = "Sy: \(current.x), \(current.y)"
+    }
+
+    func resumeSewing() {
+        guard document.isProtected, document.sewingProgress != nil else { return }
+        tool = .hand
+        moveMode = .sheet
+        zoom = 2.4
+        statusMessage = "Sy videre"
+    }
+
+    func advanceSewingCell() {
+        guard let next = nextSewingCell() else {
+            statusMessage = "Siste rute"
+            return
+        }
+
+        document.sewingProgress?.current = next
+        touch()
+        statusMessage = "Sy: \(next.x), \(next.y)"
+    }
+
+    func advanceSewingLine() {
+        guard let next = nextSewingLineStart() else {
+            statusMessage = "Siste linje"
+            return
+        }
+
+        document.sewingProgress?.current = next
+        touch()
+        statusMessage = "Sy: \(next.x), \(next.y)"
+    }
+
+    func jumpSewing(to coordinate: GridCoordinate) {
+        guard document.isProtected, let progress = document.sewingProgress else { return }
+        guard document.cells[coordinate] != nil else { return }
+        let traversal = document.sewingTraversal(from: progress.startCorner)
+        guard traversal.contains(coordinate) else { return }
+
+        document.sewingProgress?.current = coordinate
+        touch()
+        statusMessage = "Sy: \(coordinate.x), \(coordinate.y)"
+    }
+
+    func cancelSewing() {
+        guard document.sewingProgress != nil else { return }
+        document.sewingProgress = nil
+        touch()
+        statusMessage = "Sy-fremdrift avbrutt"
+    }
+
     func togglePaintAndEraseFromPencilDoubleTap() {
+        guard canEditPattern else { return }
         if tool == .erase {
             tool = .paint
             statusMessage = "Tegn"
@@ -178,6 +281,12 @@ final class PatternStore: ObservableObject {
     }
 
     func beginInteraction(at coordinate: GridCoordinate) {
+        if document.isProtected {
+            jumpSewing(to: coordinate)
+            return
+        }
+
+        guard canEditPattern else { return }
         guard contains(coordinate) else { return }
         selectionAnchor = coordinate
         interactionPreviousCoordinate = coordinate
@@ -192,6 +301,12 @@ final class PatternStore: ObservableObject {
     }
 
     func updateInteraction(at coordinate: GridCoordinate) {
+        if document.isProtected {
+            jumpSewing(to: coordinate)
+            return
+        }
+
+        guard canEditPattern else { return }
         if tool == .hand, moveMode == .pattern {
             updatePatternMove(to: coordinate)
             return
@@ -219,6 +334,10 @@ final class PatternStore: ObservableObject {
     }
 
     func handleTapOrDrag(at coordinate: GridCoordinate) {
+        guard canEditPattern else {
+            statusMessage = "Mønsteret er beskyttet"
+            return
+        }
         guard contains(coordinate) else { return }
         lastTouchedCoordinate = coordinate
 
@@ -271,6 +390,7 @@ final class PatternStore: ObservableObject {
     }
 
     func cutSelection() {
+        guard canEditPattern else { return }
         let snapshot = clipboardSnapshotForSelection()
         guard !snapshot.isEmpty else { return }
 
@@ -281,6 +401,7 @@ final class PatternStore: ObservableObject {
     }
 
     func pasteClipboard() {
+        guard canEditPattern else { return }
         guard !clipboard.isEmpty else { return }
         let origin = lastTouchedCoordinate ?? GridCoordinate(x: document.width / 2, y: document.height / 2)
 
@@ -297,18 +418,21 @@ final class PatternStore: ObservableObject {
     }
 
     func mirrorSelectionHorizontally() {
+        guard canEditPattern else { return }
         transformSelection { coordinate, bounds in
             GridCoordinate(x: bounds.maxX - (coordinate.x - bounds.minX), y: coordinate.y)
         }
     }
 
     func mirrorSelectionVertically() {
+        guard canEditPattern else { return }
         transformSelection { coordinate, bounds in
             GridCoordinate(x: coordinate.x, y: bounds.maxY - (coordinate.y - bounds.minY))
         }
     }
 
     func rotateSelectionClockwise() {
+        guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
         clearCells(in: selection)
@@ -328,6 +452,7 @@ final class PatternStore: ObservableObject {
     }
 
     func completeQuarterAsSquare() {
+        guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
         var newSelection = selection
@@ -354,6 +479,7 @@ final class PatternStore: ObservableObject {
     }
 
     func replaceColor(from source: UUID, to target: UUID) {
+        guard canEditPattern else { return }
         guard source != target else { return }
         for (coordinate, swatchID) in document.cells where swatchID == source {
             document.cells[coordinate] = target
@@ -363,6 +489,7 @@ final class PatternStore: ObservableObject {
     }
 
     func applyPalette(id: UUID) {
+        guard canEditPattern else { return }
         guard let palette = palettes.first(where: { $0.id == id }) else { return }
         document.paletteID = palette.id
         document.paletteName = palette.name
@@ -373,6 +500,7 @@ final class PatternStore: ObservableObject {
     }
 
     func saveCustomPalette(name: String, swatches: [PaletteSwatch], replacing paletteID: UUID?) {
+        guard canEditPattern else { return }
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let paletteName = cleanedName.isEmpty ? "Egendefinert palett" : cleanedName
         let normalizedSwatches = PatternPalette.normalizedSwatches(swatches)
@@ -392,6 +520,7 @@ final class PatternStore: ObservableObject {
     }
 
     func deleteCustomPalette(id: UUID) {
+        guard canEditPattern else { return }
         guard let index = customPalettes.firstIndex(where: { $0.id == id }) else { return }
         let deletedName = customPalettes[index].name
         customPalettes.remove(at: index)
@@ -411,6 +540,7 @@ final class PatternStore: ObservableObject {
     }
 
     func resize(width: Int, height: Int) {
+        guard canEditPattern else { return }
         document.width = width
         document.height = height
         document.cells = document.cells.filter { coordinate, _ in
@@ -521,6 +651,7 @@ final class PatternStore: ObservableObject {
     }
 
     func clearOutline() {
+        guard canEditPattern else { return }
         document.outlineCells.removeAll()
         touch()
         statusMessage = "Fjernet ytterkant"
@@ -548,6 +679,7 @@ final class PatternStore: ObservableObject {
     }
 
     private func transformSelection(_ transform: (GridCoordinate, GridBounds) -> GridCoordinate) {
+        guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
         clearCells(in: selection)
@@ -565,6 +697,7 @@ final class PatternStore: ObservableObject {
     }
 
     private func beginPatternMove(at coordinate: GridCoordinate) {
+        guard canEditPattern else { return }
         guard let bounds = patternContentBounds else {
             statusMessage = "Ingen ruter å flytte"
             return
@@ -583,6 +716,7 @@ final class PatternStore: ObservableObject {
     }
 
     private func updatePatternMove(to coordinate: GridCoordinate) {
+        guard canEditPattern else { return }
         guard let snapshot = patternMoveSnapshot else { return }
 
         let requestedOffset = GridCoordinate(
@@ -603,6 +737,7 @@ final class PatternStore: ObservableObject {
     }
 
     private func commitPatternMove() {
+        guard canEditPattern else { return }
         guard let snapshot = patternMoveSnapshot else { return }
         let offset = patternMovePreviewOffset
         guard offset != GridCoordinate(x: 0, y: 0) else { return }
@@ -637,6 +772,35 @@ final class PatternStore: ObservableObject {
                 partialResult[coordinate] = swatchID
             }
         }
+    }
+
+    private var canEditPattern: Bool {
+        !document.isProtected
+    }
+
+    private func nextSewingCell() -> GridCoordinate? {
+        guard document.isProtected, let progress = document.sewingProgress else { return nil }
+        let traversal = document.sewingTraversal(from: progress.startCorner)
+        guard let currentIndex = traversal.firstIndex(of: progress.current) else {
+            return traversal.first
+        }
+        let nextIndex = traversal.index(after: currentIndex)
+        guard nextIndex < traversal.endIndex else { return nil }
+        return traversal[nextIndex]
+    }
+
+    private func nextSewingLineStart() -> GridCoordinate? {
+        guard document.isProtected, let progress = document.sewingProgress else { return nil }
+        let traversal = document.sewingTraversal(from: progress.startCorner)
+        guard let currentIndex = traversal.firstIndex(of: progress.current) else {
+            return traversal.first
+        }
+
+        for coordinate in traversal[traversal.index(after: currentIndex)...] where coordinate.y != progress.current.y {
+            return coordinate
+        }
+
+        return nil
     }
 
     private func clipboardSnapshotForSelection() -> [GridCoordinate: UUID] {

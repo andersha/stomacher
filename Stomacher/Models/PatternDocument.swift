@@ -21,6 +21,43 @@ struct GridBounds: Equatable {
     var height: Int { maxY - minY + 1 }
 }
 
+enum SewingStartCorner: String, Codable, CaseIterable, Identifiable {
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .topLeft: "Oppe til venstre"
+        case .topRight: "Oppe til høyre"
+        case .bottomLeft: "Nede til venstre"
+        case .bottomRight: "Nede til høyre"
+        }
+    }
+
+    var horizontalStep: Int {
+        switch self {
+        case .topLeft, .bottomLeft: 1
+        case .topRight, .bottomRight: -1
+        }
+    }
+
+    var verticalStep: Int {
+        switch self {
+        case .topLeft, .topRight: 1
+        case .bottomLeft, .bottomRight: -1
+        }
+    }
+}
+
+struct SewingProgress: Codable, Equatable {
+    var startCorner: SewingStartCorner
+    var current: GridCoordinate
+}
+
 struct PatternDocument: Codable, Identifiable {
     static let oldestSupportedFileFormatVersion = 1
     static let currentFileFormatVersion = 1
@@ -38,6 +75,8 @@ struct PatternDocument: Codable, Identifiable {
     var cells: [GridCoordinate: UUID]
     var outlineCells: Set<GridCoordinate>
     var hideUnusedArea: Bool
+    var isProtected: Bool
+    var sewingProgress: SewingProgress?
     var createdAt: Date
     var updatedAt: Date
 
@@ -55,6 +94,8 @@ struct PatternDocument: Codable, Identifiable {
         case cells
         case outlineCells
         case hideUnusedArea
+        case isProtected
+        case sewingProgress
         case createdAt
         case updatedAt
     }
@@ -73,6 +114,8 @@ struct PatternDocument: Codable, Identifiable {
         cells: [GridCoordinate: UUID] = [:],
         outlineCells: Set<GridCoordinate> = [],
         hideUnusedArea: Bool = false,
+        isProtected: Bool = false,
+        sewingProgress: SewingProgress? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -89,6 +132,8 @@ struct PatternDocument: Codable, Identifiable {
         self.cells = cells
         self.outlineCells = outlineCells
         self.hideUnusedArea = hideUnusedArea
+        self.isProtected = isProtected
+        self.sewingProgress = sewingProgress
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -117,6 +162,8 @@ struct PatternDocument: Codable, Identifiable {
         cells = try container.decode([GridCoordinate: UUID].self, forKey: .cells)
         outlineCells = try container.decodeIfPresent(Set<GridCoordinate>.self, forKey: .outlineCells) ?? []
         hideUnusedArea = try container.decodeIfPresent(Bool.self, forKey: .hideUnusedArea) ?? false
+        isProtected = try container.decodeIfPresent(Bool.self, forKey: .isProtected) ?? false
+        sewingProgress = try container.decodeIfPresent(SewingProgress.self, forKey: .sewingProgress)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
@@ -136,6 +183,8 @@ struct PatternDocument: Codable, Identifiable {
         try container.encode(cells, forKey: .cells)
         try container.encode(outlineCells, forKey: .outlineCells)
         try container.encode(hideUnusedArea, forKey: .hideUnusedArea)
+        try container.encode(isProtected, forKey: .isProtected)
+        try container.encodeIfPresent(sewingProgress, forKey: .sewingProgress)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
@@ -183,6 +232,31 @@ struct PatternDocument: Codable, Identifiable {
 
     func swatch(for id: UUID) -> PaletteSwatch? {
         palette.first { $0.id == id }
+    }
+
+    func sewingTraversal(from startCorner: SewingStartCorner) -> [GridCoordinate] {
+        let bounds = printableBounds
+        let patternArea = activePatternArea()
+        let yValues = stride(
+            from: startCorner.verticalStep > 0 ? bounds.minY : bounds.maxY,
+            through: startCorner.verticalStep > 0 ? bounds.maxY : bounds.minY,
+            by: startCorner.verticalStep
+        )
+        let xStart = startCorner.horizontalStep > 0 ? bounds.minX : bounds.maxX
+        let xEnd = startCorner.horizontalStep > 0 ? bounds.maxX : bounds.minX
+
+        var traversal: [GridCoordinate] = []
+        traversal.reserveCapacity(bounds.width * bounds.height)
+
+        for y in yValues {
+            for x in stride(from: xStart, through: xEnd, by: startCorner.horizontalStep) {
+                let coordinate = GridCoordinate(x: x, y: y)
+                guard patternArea?.contains(coordinate) ?? true else { continue }
+                traversal.append(coordinate)
+            }
+        }
+
+        return traversal
     }
 
     static func normalizedGridBlockSize(_ value: Int) -> Int {

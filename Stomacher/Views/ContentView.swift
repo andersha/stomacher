@@ -18,6 +18,7 @@ private struct ShareFile: Identifiable {
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store: PatternStore
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
     @State private var shareFile: ShareFile?
     @State private var showingDocumentBrowser = false
     @State private var showingImporter = false
@@ -32,21 +33,34 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             NavigationStack {
                 InspectorView(
                     store: store,
                     replaceSourceID: $replaceSourceID,
                     replaceTargetID: $replaceTargetID,
-                    exportPDF: exportPDF
+                    exportPDF: exportPDF,
+                    startSewing: startSewing,
+                    resumeSewing: resumeSewing
                 )
                 .navigationTitle("Bringeduk")
             }
         } detail: {
-            VStack(spacing: 0) {
-                PatternCanvasView(store: store)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                StatusBar(store: store)
+            ZStack(alignment: .bottom) {
+                VStack(spacing: 0) {
+                    PatternCanvasView(store: store)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    StatusBar(store: store)
+                }
+
+                if store.document.isProtected, store.document.sewingProgress != nil {
+                    SewingControls(store: store) {
+                        store.cancelSewing()
+                        columnVisibility = .all
+                    }
+                    .padding(.bottom, 42)
+                    .padding(.horizontal, 16)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(PencilDoubleTapView(store: store))
@@ -184,6 +198,20 @@ struct ContentView: View {
         }
     }
 
+    private func startSewing(from startCorner: SewingStartCorner) {
+        store.startSewing(from: startCorner)
+        if store.document.sewingProgress != nil {
+            columnVisibility = .detailOnly
+        }
+    }
+
+    private func resumeSewing() {
+        store.resumeSewing()
+        if store.document.sewingProgress != nil {
+            columnVisibility = .detailOnly
+        }
+    }
+
     private func updateIdleTimer(for scenePhase: ScenePhase) {
         UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && !store.isAutolockEnabled
     }
@@ -318,7 +346,10 @@ private struct InspectorView: View {
     @State private var pendingResize: GridResizeRequest?
     @State private var showingResizeWarning = false
     @State private var showingOutlineDeleteConfirmation = false
+    @State private var showingSewingStartDialog = false
     var exportPDF: () -> Void
+    var startSewing: (SewingStartCorner) -> Void
+    var resumeSewing: () -> Void
 
     private var toolDetailBackground: Color {
         Color(uiColor: .secondarySystemFill)
@@ -330,29 +361,40 @@ private struct InspectorView: View {
     var body: some View {
         Form {
             Section("Dokument") {
-                TextField("Navn", text: Binding {
-                    store.document.title
-                } set: { newValue in
-                    store.updateTitle(newValue)
-                })
+                Group {
+                    TextField("Navn", text: Binding {
+                        store.document.title
+                    } set: { newValue in
+                        store.updateTitle(newValue)
+                    })
 
-                Stepper("Bredde: \(store.document.width)", value: Binding {
-                    store.document.width
-                } set: { newValue in
-                    requestResize(width: newValue, height: store.document.height)
-                }, in: 40...260, step: 10)
+                    Stepper("Bredde: \(store.document.width)", value: Binding {
+                        store.document.width
+                    } set: { newValue in
+                        requestResize(width: newValue, height: store.document.height)
+                    }, in: 40...260, step: 10)
 
-                Stepper("Høyde: \(store.document.height)", value: Binding {
-                    store.document.height
-                } set: { newValue in
-                    requestResize(width: store.document.width, height: newValue)
-                }, in: 40...200, step: 10)
+                    Stepper("Høyde: \(store.document.height)", value: Binding {
+                        store.document.height
+                    } set: { newValue in
+                        requestResize(width: store.document.width, height: newValue)
+                    }, in: 40...200, step: 10)
 
-                Stepper("Ruteblokk: \(store.document.gridBlockSize)", value: Binding {
-                    store.document.gridBlockSize
+                    Stepper("Ruteblokk: \(store.document.gridBlockSize)", value: Binding {
+                        store.document.gridBlockSize
+                    } set: { newValue in
+                        store.updateGridBlockSize(newValue)
+                    }, in: 2...20, step: 1)
+                }
+                .disabled(store.document.isProtected)
+
+                Toggle(isOn: Binding {
+                    store.document.isProtected
                 } set: { newValue in
-                    store.updateGridBlockSize(newValue)
-                }, in: 2...20, step: 1)
+                    store.updateProtected(newValue)
+                }) {
+                    Label("Beskytt", systemImage: store.document.isProtected ? "lock.fill" : "lock.open")
+                }
             }
 
             Section("Verktøy") {
@@ -366,198 +408,220 @@ private struct InspectorView: View {
                     Label("Autolås", systemImage: "lock")
                 }
 
-                ForEach(CanvasTool.allCases) { tool in
-                    Button {
-                        store.tool = tool
-                    } label: {
-                        HStack {
-                            Label(tool.title, systemImage: tool.systemImage)
-                            Spacer()
-                            if store.tool == tool {
-                                Image(systemName: "checkmark")
-                                    .foregroundStyle(.tint)
+                if !store.document.isProtected {
+                    ForEach(CanvasTool.allCases) { tool in
+                        Button {
+                            store.tool = tool
+                        } label: {
+                            HStack {
+                                Label(tool.title, systemImage: tool.systemImage)
+                                Spacer()
+                                if store.tool == tool {
+                                    Image(systemName: "checkmark")
+                                        .foregroundStyle(.tint)
+                                }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(store.tool == tool ? .isSelected : [])
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(store.tool == tool ? .isSelected : [])
 
-                    if store.tool == tool, tool == .hand {
-                        Picker("Flytt", selection: $store.moveMode) {
-                            ForEach(MoveMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .listRowBackground(toolDetailBackground)
-                    }
-
-                    if store.tool == tool, tool == .select {
-                        Group {
-                            Picker("Markering", selection: $store.selectionMode) {
-                                ForEach(SelectionMode.allCases) { mode in
+                        if store.tool == tool, tool == .hand {
+                            Picker("Flytt", selection: $store.moveMode) {
+                                ForEach(MoveMode.allCases) { mode in
                                     Text(mode.title).tag(mode)
                                 }
                             }
-                            .pickerStyle(.inline)
-
-                            ToolDetailButton(title: "Kopier", systemImage: "doc.on.doc") {
-                                store.copySelection()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Klipp ut", systemImage: "scissors") {
-                                store.cutSelection()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Lim inn", systemImage: "doc.on.clipboard") {
-                                store.pasteClipboard()
-                            }
-                            .disabled(store.clipboard.isEmpty)
-
-                            ToolDetailButton(title: "Speil horisontalt", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
-                                store.mirrorSelectionHorizontally()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Speil vertikalt", systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down") {
-                                store.mirrorSelectionVertically()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Roter 90°", systemImage: "rotate.right") {
-                                store.rotateSelectionClockwise()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Lag kvadrat av 1/4", systemImage: "square.grid.2x2") {
-                                store.completeQuarterAsSquare()
-                            }
-                            .disabled(store.selection.isEmpty)
-
-                            ToolDetailButton(title: "Fjern markering", systemImage: "xmark.circle", isDestructive: true) {
-                                store.clearSelection()
-                            }
-                            .disabled(store.selection.isEmpty)
+                            .pickerStyle(.segmented)
+                            .listRowBackground(toolDetailBackground)
                         }
-                        .listRowBackground(toolDetailBackground)
-                    }
 
-                    if store.tool == tool, tool == .replaceColor {
-                        Group {
-                            Picker("Fra", selection: $replaceSourceID) {
-                                ForEach(store.document.palette) { swatch in
-                                    Text("\(swatch.symbol) \(swatch.name)").tag(swatch.id)
+                        if store.tool == tool, tool == .select {
+                            Group {
+                                Picker("Markering", selection: $store.selectionMode) {
+                                    ForEach(SelectionMode.allCases) { mode in
+                                        Text(mode.title).tag(mode)
+                                    }
+                                }
+                                .pickerStyle(.inline)
+
+                                ToolDetailButton(title: "Kopier", systemImage: "doc.on.doc") {
+                                    store.copySelection()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Klipp ut", systemImage: "scissors") {
+                                    store.cutSelection()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Lim inn", systemImage: "doc.on.clipboard") {
+                                    store.pasteClipboard()
+                                }
+                                .disabled(store.clipboard.isEmpty)
+
+                                ToolDetailButton(title: "Speil horisontalt", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") {
+                                    store.mirrorSelectionHorizontally()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Speil vertikalt", systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down") {
+                                    store.mirrorSelectionVertically()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Roter 90°", systemImage: "rotate.right") {
+                                    store.rotateSelectionClockwise()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Lag kvadrat av 1/4", systemImage: "square.grid.2x2") {
+                                    store.completeQuarterAsSquare()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                ToolDetailButton(title: "Fjern markering", systemImage: "xmark.circle", isDestructive: true) {
+                                    store.clearSelection()
+                                }
+                                .disabled(store.selection.isEmpty)
+                            }
+                            .listRowBackground(toolDetailBackground)
+                        }
+
+                        if store.tool == tool, tool == .replaceColor {
+                            Group {
+                                Picker("Fra", selection: $replaceSourceID) {
+                                    ForEach(store.document.palette) { swatch in
+                                        Text("\(swatch.symbol) \(swatch.name)").tag(swatch.id)
+                                    }
+                                }
+
+                                Picker("Til", selection: $replaceTargetID) {
+                                    ForEach(store.document.palette) { swatch in
+                                        Text("\(swatch.symbol) \(swatch.name)").tag(swatch.id)
+                                    }
+                                }
+
+                                ToolDetailButton(title: "Bytt i hele mønsteret", systemImage: "arrow.triangle.2.circlepath") {
+                                    store.replaceColor(from: replaceSourceID, to: replaceTargetID)
                                 }
                             }
+                            .listRowBackground(toolDetailBackground)
+                        }
 
-                            Picker("Til", selection: $replaceTargetID) {
-                                ForEach(store.document.palette) { swatch in
-                                    Text("\(swatch.symbol) \(swatch.name)").tag(swatch.id)
+                        if store.tool == tool, tool == .outline {
+                            Group {
+                                LabeledContent("Ruter", value: "\(store.document.outlineCells.count)")
+
+                                Toggle(isOn: Binding {
+                                    store.document.hideUnusedArea
+                                } set: { newValue in
+                                    store.updateHideUnusedArea(newValue)
+                                }) {
+                                    Label("Skjul ubrukt område", systemImage: "square.dashed")
+                                }
+
+                                if store.document.hasCustomOutline {
+                                    Text(store.document.activePatternArea() == nil ? "Ytterkanten er ikke lukket ennå. Når den lukkes brukes den som mønstergrense." : "Ytterkanten brukes som aktiv mønstergrense.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+
+                                    ToolDetailButton(title: "Fjern ytterkant", systemImage: "xmark.diamond", isDestructive: true) {
+                                        showingOutlineDeleteConfirmation = true
+                                    }
+                                } else {
+                                    Text("Uten egen ytterkant brukes hele rutenettet som mønstergrense.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
                             }
-
-                            ToolDetailButton(title: "Bytt i hele mønsteret", systemImage: "arrow.triangle.2.circlepath") {
-                                store.replaceColor(from: replaceSourceID, to: replaceTargetID)
-                            }
+                            .listRowBackground(toolDetailBackground)
                         }
-                        .listRowBackground(toolDetailBackground)
-                    }
-
-                    if store.tool == tool, tool == .outline {
-                        Group {
-                            LabeledContent("Ruter", value: "\(store.document.outlineCells.count)")
-
-                            Toggle(isOn: Binding {
-                                store.document.hideUnusedArea
-                            } set: { newValue in
-                                store.updateHideUnusedArea(newValue)
-                            }) {
-                                Label("Skjul ubrukt område", systemImage: "square.dashed")
-                            }
-
-                            if store.document.hasCustomOutline {
-                                Text(store.document.activePatternArea() == nil ? "Ytterkanten er ikke lukket ennå. Når den lukkes brukes den som mønstergrense." : "Ytterkanten brukes som aktiv mønstergrense.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-
-                                ToolDetailButton(title: "Fjern ytterkant", systemImage: "xmark.diamond", isDestructive: true) {
-                                    showingOutlineDeleteConfirmation = true
-                                }
-                            } else {
-                                Text("Uten egen ytterkant brukes hele rutenettet som mønstergrense.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .listRowBackground(toolDetailBackground)
                     }
                 }
             }
 
-            Section("Palett") {
-                Picker("Palett", selection: Binding {
-                    store.document.paletteID
-                } set: { paletteID in
-                    store.applyPalette(id: paletteID)
-                }) {
-                    ForEach(store.palettes) { palette in
-                        Text(palette.name).tag(palette.id)
+            if !store.document.isProtected {
+                Section("Palett") {
+                    Picker("Palett", selection: Binding {
+                        store.document.paletteID
+                    } set: { paletteID in
+                        store.applyPalette(id: paletteID)
+                    }) {
+                        ForEach(store.palettes) { palette in
+                            Text(palette.name).tag(palette.id)
+                        }
                     }
-                }
 
-                NavigationLink {
-                    PaletteEditorView(store: store)
-                } label: {
-                    Label("Rediger palett", systemImage: "pencil")
-                }
-
-                if store.canDeleteSelectedPalette {
-                    Button(role: .destructive) {
-                        store.deleteCustomPalette(id: store.document.paletteID)
+                    NavigationLink {
+                        PaletteEditorView(store: store)
                     } label: {
-                        Label("Slett egendefinert palett", systemImage: "trash")
+                        Label("Rediger palett", systemImage: "pencil")
+                    }
+
+                    if store.canDeleteSelectedPalette {
+                        Button(role: .destructive) {
+                            store.deleteCustomPalette(id: store.document.paletteID)
+                        } label: {
+                            Label("Slett egendefinert palett", systemImage: "trash")
+                        }
+                    }
+
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 58), spacing: 8)], spacing: 8) {
+                        ForEach(store.document.palette) { swatch in
+                            Button {
+                                store.selectedSwatchID = swatch.id
+                                store.tool = .paint
+                            } label: {
+                                VStack(spacing: 6) {
+                                    Circle()
+                                        .fill(swatch.color)
+                                        .overlay(Circle().stroke(.primary.opacity(store.selectedSwatchID == swatch.id ? 0.9 : 0.18), lineWidth: store.selectedSwatchID == swatch.id ? 3 : 1))
+                                        .frame(width: 32, height: 32)
+                                    Text(swatch.symbol)
+                                        .font(.caption.weight(.semibold))
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(swatch.name)
+                        }
                     }
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 58), spacing: 8)], spacing: 8) {
-                    ForEach(store.document.palette) { swatch in
-                        Button {
-                            store.selectedSwatchID = swatch.id
-                            store.tool = .paint
-                        } label: {
-                            VStack(spacing: 6) {
-                                Circle()
-                                    .fill(swatch.color)
-                                    .overlay(Circle().stroke(.primary.opacity(store.selectedSwatchID == swatch.id ? 0.9 : 0.18), lineWidth: store.selectedSwatchID == swatch.id ? 3 : 1))
-                                    .frame(width: 32, height: 32)
-                                Text(swatch.symbol)
-                                    .font(.caption.weight(.semibold))
-                            }
-                            .frame(maxWidth: .infinity)
+                Section("Teknikk") {
+                    Picker("Teknikk", selection: Binding {
+                        store.document.technique
+                    } set: { newValue in
+                        store.updateTechnique(newValue)
+                    }) {
+                        ForEach(PatternTechnique.allCases) { technique in
+                            Text(technique.title).tag(technique)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(swatch.name)
                     }
+                    .pickerStyle(.segmented)
+
+                    LabeledContent("Utfylte felt", value: "\(store.document.cells.count)")
                 }
             }
 
-            Section("Teknikk") {
-                Picker("Teknikk", selection: Binding {
-                    store.document.technique
-                } set: { newValue in
-                    store.updateTechnique(newValue)
-                }) {
-                    ForEach(PatternTechnique.allCases) { technique in
-                        Text(technique.title).tag(technique)
+            if store.document.isProtected {
+                Section("Sy") {
+                    if store.document.sewingProgress == nil {
+                        Button {
+                            showingSewingStartDialog = true
+                        } label: {
+                            Label("Start", systemImage: "scissors")
+                        }
+                    } else {
+                        Button {
+                            resumeSewing()
+                        } label: {
+                            Label("Fortsett", systemImage: "scissors")
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-
-                LabeledContent("Utfylte felt", value: "\(store.document.cells.count)")
             }
 
             Section("Utskrift") {
@@ -580,6 +644,14 @@ private struct InspectorView: View {
             Button("Ja", role: .destructive) {
                 store.clearOutline()
             }
+        }
+        .confirmationDialog("Start sying fra", isPresented: $showingSewingStartDialog, titleVisibility: .visible) {
+            ForEach(SewingStartCorner.allCases) { corner in
+                Button(corner.title) {
+                    startSewing(corner)
+                }
+            }
+            Button("Avbryt", role: .cancel) {}
         }
     }
 
@@ -615,6 +687,40 @@ private struct ToolDetailButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+private struct SewingControls: View {
+    @ObservedObject var store: PatternStore
+    var cancel: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                store.advanceSewingCell()
+            } label: {
+                Label("Neste rute", systemImage: "arrow.right")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!store.canAdvanceSewingCell)
+
+            Button {
+                store.advanceSewingLine()
+            } label: {
+                Label("Neste linje", systemImage: "arrow.down")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!store.canAdvanceSewingLine)
+
+            Button(role: .destructive, action: cancel) {
+                Label("Avbryt", systemImage: "xmark")
+            }
+            .buttonStyle(.bordered)
+        }
+        .controlSize(.large)
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
     }
 }
 
