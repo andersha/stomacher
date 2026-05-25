@@ -16,6 +16,7 @@ private struct ShareFile: Identifiable {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var store: PatternStore
     @State private var shareFile: ShareFile?
     @State private var showingDocumentBrowser = false
@@ -163,16 +164,28 @@ struct ContentView: View {
         .onAppear {
             syncReplaceColors()
             store.startAutosave()
+            updateIdleTimer(for: scenePhase)
         }
         .onDisappear {
             store.stopAutosave()
+            UIApplication.shared.isIdleTimerDisabled = false
         }
         .onChange(of: store.document.palette) {
             syncReplaceColors()
         }
+        .onChange(of: store.isAutolockEnabled) {
+            updateIdleTimer(for: scenePhase)
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            updateIdleTimer(for: newPhase)
+        }
         .onOpenURL { url in
             requestOpenFile(at: url)
         }
+    }
+
+    private func updateIdleTimer(for scenePhase: ScenePhase) {
+        UIApplication.shared.isIdleTimerDisabled = scenePhase == .active && !store.isAutolockEnabled
     }
 
     private func requestOpenFile(at url: URL) {
@@ -347,6 +360,10 @@ private struct InspectorView: View {
                     Toggle(isOn: $store.usesApplePencilForEditing) {
                         Label("Apple Pencil", systemImage: "applepencil")
                     }
+                }
+
+                Toggle(isOn: $store.isAutolockEnabled) {
+                    Label("Autolås", systemImage: "lock")
                 }
 
                 ForEach(CanvasTool.allCases) { tool in

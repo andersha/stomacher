@@ -84,6 +84,11 @@ final class PatternStore: ObservableObject {
             UserDefaults.standard.set(usesApplePencilForEditing, forKey: Self.applePencilEditingKey)
         }
     }
+    @Published var isAutolockEnabled = true {
+        didSet {
+            UserDefaults.standard.set(isAutolockEnabled, forKey: Self.autolockEnabledKey)
+        }
+    }
     @Published var lastTouchedCoordinate: GridCoordinate?
     @Published var statusMessage = "Klar"
     @Published var hasUnsavedChanges = false
@@ -93,6 +98,7 @@ final class PatternStore: ObservableObject {
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private static let applePencilEditingKey = "no.abrahamsen.stomacher.usesApplePencilForEditing"
+    private static let autolockEnabledKey = "no.abrahamsen.stomacher.isAutolockEnabled"
     private let customPalettesKey = "no.abrahamsen.stomacher.customPalettes"
     private var autosaveTask: Task<Void, Never>?
     private var selectionAnchor: GridCoordinate?
@@ -104,6 +110,7 @@ final class PatternStore: ObservableObject {
         self.document = document
         self.selectedSwatchID = document.palette.first?.id ?? UUID()
         self.usesApplePencilForEditing = UserDefaults.standard.bool(forKey: Self.applePencilEditingKey)
+        self.isAutolockEnabled = UserDefaults.standard.object(forKey: Self.autolockEnabledKey) as? Bool ?? true
         self.customPalettes = Self.loadCustomPalettes(key: customPalettesKey)
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
