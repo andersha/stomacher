@@ -248,14 +248,15 @@ struct PatternDocument: Codable, Identifiable {
             through: startCorner.verticalStep > 0 ? bounds.maxY : bounds.minY,
             by: startCorner.verticalStep
         )
-        let xStart = startCorner.horizontalStep > 0 ? bounds.minX : bounds.maxX
-        let xEnd = startCorner.horizontalStep > 0 ? bounds.maxX : bounds.minX
-
         var traversal: [GridCoordinate] = []
         traversal.reserveCapacity(bounds.width * bounds.height)
 
-        for y in yValues {
-            for x in stride(from: xStart, through: xEnd, by: startCorner.horizontalStep) {
+        for (rowIndex, y) in yValues.enumerated() {
+            let horizontalStep = rowIndex.isMultiple(of: 2) ? startCorner.horizontalStep : -startCorner.horizontalStep
+            let xStart = horizontalStep > 0 ? bounds.minX : bounds.maxX
+            let xEnd = horizontalStep > 0 ? bounds.maxX : bounds.minX
+
+            for x in stride(from: xStart, through: xEnd, by: horizontalStep) {
                 let coordinate = GridCoordinate(x: x, y: y)
                 guard patternArea?.contains(coordinate) ?? true else { continue }
                 traversal.append(coordinate)
