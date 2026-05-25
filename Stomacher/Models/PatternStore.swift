@@ -7,6 +7,7 @@ private let logger = Logger(subsystem: "no.abrahamsen.stomacher", category: "Fil
 enum CanvasTool: String, CaseIterable, Identifiable {
     case hand
     case paint
+    case fill
     case erase
     case outline
     case select
@@ -19,6 +20,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         switch self {
         case .hand: "Flytt"
         case .paint: "Tegn"
+        case .fill: "Fyll inn"
         case .erase: "Visk"
         case .outline: "Ytterkant"
         case .select: "Marker"
@@ -31,6 +33,7 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         switch self {
         case .hand: "hand.raised"
         case .paint: "paintbrush.pointed"
+        case .fill: "square.fill"
         case .erase: "eraser"
         case .outline: "lasso"
         case .select: "selection.pin.in.out"
@@ -38,6 +41,14 @@ enum CanvasTool: String, CaseIterable, Identifiable {
         case .replaceColor: "arrow.triangle.2.circlepath"
         }
     }
+}
+
+struct PendingFillConfirmation: Identifiable {
+    let id = UUID()
+    var targets: [GridCoordinate]
+    var swatchID: UUID
+
+    var count: Int { targets.count }
 }
 
 enum SelectionMode: String, CaseIterable, Identifiable {
@@ -92,6 +103,7 @@ final class PatternStore: ObservableObject {
     @Published var lastTouchedCoordinate: GridCoordinate?
     @Published var statusMessage = "Klar"
     @Published var hasUnsavedChanges = false
+    @Published var pendingFillConfirmation: PendingFillConfirmation?
     @Published private(set) var customPalettes: [PatternPalette] = []
     @Published private(set) var currentDocumentURL: URL?
 
@@ -295,6 +307,12 @@ final class PatternStore: ObservableObject {
 
         guard canEditPattern else { return }
         guard contains(coordinate) else { return }
+
+        if tool == .fill {
+            requestFill(at: coordinate)
+            return
+        }
+
         selectionAnchor = coordinate
         interactionPreviousCoordinate = coordinate
 
@@ -320,6 +338,7 @@ final class PatternStore: ObservableObject {
         }
 
         guard contains(coordinate) else { return }
+        guard tool != .fill else { return }
 
         if tool == .outline, let previous = interactionPreviousCoordinate {
             addOutlineLine(from: previous, to: coordinate)
@@ -359,6 +378,8 @@ final class PatternStore: ObservableObject {
             document.cells[coordinate] = selectedSwatchID
             selection.removeAll()
             touch()
+        case .fill:
+            statusMessage = "Trykk i et område for å fylle"
         case .erase:
             let removedOutline = document.outlineCells.remove(coordinate) != nil
             document.cells.removeValue(forKey: coordinate)
@@ -493,6 +514,17 @@ final class PatternStore: ObservableObject {
         }
         touch()
         statusMessage = "Byttet farge"
+    }
+
+    func confirmPendingFill() {
+        guard canEditPattern else { return }
+        guard let pendingFillConfirmation else { return }
+        self.pendingFillConfirmation = nil
+        applyFill(targets: pendingFillConfirmation.targets, swatchID: pendingFillConfirmation.swatchID)
+    }
+
+    func cancelPendingFill() {
+        pendingFillConfirmation = nil
     }
 
     func applyPalette(id: UUID) {
@@ -823,6 +855,66 @@ final class PatternStore: ObservableObject {
         for coordinate in coordinates {
             document.cells.removeValue(forKey: coordinate)
         }
+    }
+
+    private func requestFill(at coordinate: GridCoordinate) {
+        lastTouchedCoordinate = coordinate
+        let targets = fillTargets(from: coordinate).filter { document.cells[$0] != selectedSwatchID }
+        guard !targets.isEmpty else {
+            statusMessage = "Området har allerede valgt farge"
+            return
+        }
+
+        if targets.count > 100 {
+            pendingFillConfirmation = PendingFillConfirmation(targets: targets, swatchID: selectedSwatchID)
+        } else {
+            applyFill(targets: targets, swatchID: selectedSwatchID)
+        }
+    }
+
+    private func applyFill(targets: [GridCoordinate], swatchID: UUID) {
+        for coordinate in targets {
+            document.cells[coordinate] = swatchID
+        }
+
+        selection.removeAll()
+        touch()
+        statusMessage = "Fylte \(targets.count) ruter"
+    }
+
+    private func fillTargets(from start: GridCoordinate) -> [GridCoordinate] {
+        guard contains(start) else { return [] }
+
+        let startSwatchID = document.cells[start]
+        var visited = Set<GridCoordinate>()
+        var targets: [GridCoordinate] = []
+        var queue = [start]
+        var queueIndex = 0
+
+        func canFill(_ coordinate: GridCoordinate) -> Bool {
+            guard contains(coordinate) else { return false }
+            if let startSwatchID {
+                return document.cells[coordinate] == startSwatchID
+            }
+            return document.cells[coordinate] == nil
+        }
+
+        while queueIndex < queue.count {
+            let coordinate = queue[queueIndex]
+            queueIndex += 1
+
+            guard !visited.contains(coordinate), canFill(coordinate) else { continue }
+            visited.insert(coordinate)
+            targets.append(coordinate)
+            guard !document.outlineCells.contains(coordinate) else { continue }
+
+            queue.append(GridCoordinate(x: coordinate.x + 1, y: coordinate.y))
+            queue.append(GridCoordinate(x: coordinate.x - 1, y: coordinate.y))
+            queue.append(GridCoordinate(x: coordinate.x, y: coordinate.y + 1))
+            queue.append(GridCoordinate(x: coordinate.x, y: coordinate.y - 1))
+        }
+
+        return targets
     }
 
     private func selectRectangle(from start: GridCoordinate, to end: GridCoordinate) {

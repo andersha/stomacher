@@ -16,19 +16,12 @@ struct DrawInputOverlay: UIViewRepresentable {
         view.backgroundColor = .clear
         view.isOpaque = false
 
-        let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        pan.maximumNumberOfTouches = 1
-        pan.cancelsTouchesInView = true
-        pan.delegate = context.coordinator
-        view.addGestureRecognizer(pan)
+        let draw = DrawingGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleDraw(_:)))
+        draw.cancelsTouchesInView = true
+        draw.delegate = context.coordinator
+        view.addGestureRecognizer(draw)
 
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        tap.cancelsTouchesInView = true
-        tap.delegate = context.coordinator
-        view.addGestureRecognizer(tap)
-
-        context.coordinator.panGesture = pan
-        context.coordinator.tapGesture = tap
+        context.coordinator.drawGesture = draw
         context.coordinator.update(store: store, cellSize: cellSize, isEnabled: isEnabled, usesApplePencilOnly: usesApplePencilOnly)
         return view
     }
@@ -40,6 +33,48 @@ struct DrawInputOverlay: UIViewRepresentable {
 
     final class DrawingTouchView: UIView {}
 
+    final class DrawingGestureRecognizer: UIGestureRecognizer {
+        private var activeTouch: UITouch?
+        private(set) var currentLocation: CGPoint = .zero
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard state == .possible, activeTouch == nil, touches.count == 1, let touch = touches.first, let view else {
+                state = .failed
+                return
+            }
+
+            activeTouch = touch
+            currentLocation = touch.location(in: view)
+            state = .began
+        }
+
+        override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard let touch = trackedTouch(in: touches), let view else { return }
+            currentLocation = touch.location(in: view)
+            state = .changed
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard trackedTouch(in: touches) != nil else { return }
+            state = .ended
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            guard trackedTouch(in: touches) != nil else { return }
+            state = .cancelled
+        }
+
+        override func reset() {
+            activeTouch = nil
+            currentLocation = .zero
+        }
+
+        private func trackedTouch(in touches: Set<UITouch>) -> UITouch? {
+            guard let activeTouch else { return nil }
+            return touches.first { $0 === activeTouch }
+        }
+    }
+
     @MainActor
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         private var store: PatternStore
@@ -47,8 +82,7 @@ struct DrawInputOverlay: UIViewRepresentable {
         private var isEnabled = true
         private var usesApplePencilOnly = false
 
-        weak var panGesture: UIPanGestureRecognizer?
-        weak var tapGesture: UITapGestureRecognizer?
+        weak var drawGesture: DrawingGestureRecognizer?
 
         init(store: PatternStore) {
             self.store = store
@@ -67,31 +101,23 @@ struct DrawInputOverlay: UIViewRepresentable {
                     NSNumber(value: UITouch.TouchType.pencil.rawValue)
                 ]
 
-            panGesture?.isEnabled = isEnabled
-            tapGesture?.isEnabled = isEnabled
-            panGesture?.allowedTouchTypes = allowedTouchTypes
-            tapGesture?.allowedTouchTypes = allowedTouchTypes
+            drawGesture?.isEnabled = isEnabled
+            drawGesture?.allowedTouchTypes = allowedTouchTypes
         }
 
-        @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        @objc func handleDraw(_ recognizer: DrawingGestureRecognizer) {
             guard isEnabled else { return }
 
             switch recognizer.state {
             case .began:
-                begin(location: recognizer.location(in: recognizer.view))
+                begin(location: recognizer.currentLocation)
             case .changed:
-                update(location: recognizer.location(in: recognizer.view))
+                update(location: recognizer.currentLocation)
             case .ended, .cancelled, .failed:
                 store.endInteraction()
             default:
                 break
             }
-        }
-
-        @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
-            guard isEnabled, recognizer.state == .ended else { return }
-            begin(location: recognizer.location(in: recognizer.view))
-            store.endInteraction()
         }
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {

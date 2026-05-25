@@ -141,6 +141,19 @@ struct ContentView: View {
         } message: {
             Text("Dette mønsteret har ulagrede endringer. Lagre før du åpner en annen fil?")
         }
+        .alert("Fylle inn område?", isPresented: Binding(
+            get: { store.pendingFillConfirmation != nil },
+            set: { if !$0 { store.cancelPendingFill() } }
+        )) {
+            Button("Avbryt", role: .cancel) {
+                store.cancelPendingFill()
+            }
+            Button("Fyll inn", role: .destructive) {
+                store.confirmPendingFill()
+            }
+        } message: {
+            Text("Dette vil endre \(store.pendingFillConfirmation?.count ?? 0) ruter til valgt farge. Er du sikker?")
+        }
         .sheet(isPresented: $showingImporter) {
             StomacherDocumentImporter(
                 initialDirectory: store.containerDocumentsURL,
@@ -402,10 +415,11 @@ private struct HelpOverlayView: View {
                         }
 
                         HelpSection(title: "Verktøy") {
-                            HelpItem(systemImage: "applepencil", title: "Apple Pencil", text: "På iPad kan du la Apple Pencil redigere mønsteret mens fingrene brukes til flytting og zoom. Double-tap på Pencil bytter mellom Tegn og Visk.")
+                            HelpItem(systemImage: "applepencil", title: "Apple Pencil", text: "På iPad kan du la Apple Pencil redigere mønsteret mens fingrene brukes til flytting og zoom. Trykk én rute eller dra over flere; første berørte rute tegnes også. Double-tap på Pencil bytter mellom Tegn og Visk.")
                             HelpItem(systemImage: "lock", title: "Autolås", text: "Når autolås er av, holder appen skjermen våken mens den er aktiv. Det er nyttig ved sying fra skjerm.")
                             HelpItem(systemImage: "hand.raised", title: "Flytt", text: "Flytter arbeidsflaten. Velg Ark for vanlig panorering, eller Mønster for å skyve selve innholdet i rutenettet.")
                             HelpItem(systemImage: "paintbrush.pointed", title: "Tegn", text: "Fyller ruter med valgt palettfarge. Tegning utenfor en lukket ytterkant blir stoppet.")
+                            HelpItem(systemImage: "square.fill", title: "Fyll inn", text: "Trykk med pennen for å fylle det lukkede området rundt ruten med valgt farge. Ytterkantruter tas med i fyllingen, men stopper fyllingen fra å gå videre. Tom startrute stoppes også av fylte ruter; farget startrute stoppes også av tomme ruter og andre farger. Hvis mer enn 100 ruter endres, ber appen om bekreftelse først.")
                             HelpItem(systemImage: "eraser", title: "Visk", text: "Fjerner farge fra ruter. Hvis du visker på en ytterkant, fjernes også ytterkantruten.")
                             HelpItem(systemImage: "lasso", title: "Ytterkant", text: "Tegner mønsterets aktive grense. Når kanten er lukket, brukes området innenfor som mønsterflate.")
                             HelpItem(systemImage: "selection.pin.in.out", title: "Marker", text: "Markerer ruter for kopiering og transformasjon. Bruk Rektangel for et område, eller Enkeltruter for å bygge markeringen rute for rute.")
