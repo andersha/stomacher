@@ -65,6 +65,7 @@ struct PatternDocument: Codable, Identifiable {
     var fileFormatVersion: Int
     var id: UUID
     var title: String
+    var patternDescription: String
     var technique: PatternTechnique
     var width: Int
     var height: Int
@@ -84,6 +85,7 @@ struct PatternDocument: Codable, Identifiable {
         case fileFormatVersion
         case id
         case title
+        case patternDescription = "description"
         case technique
         case width
         case height
@@ -104,6 +106,7 @@ struct PatternDocument: Codable, Identifiable {
         fileFormatVersion: Int = Self.currentFileFormatVersion,
         id: UUID = UUID(),
         title: String = "Ny bringeduk",
+        patternDescription: String = "",
         technique: PatternTechnique = .beads,
         width: Int = 180,
         height: Int = 120,
@@ -122,6 +125,7 @@ struct PatternDocument: Codable, Identifiable {
         self.fileFormatVersion = fileFormatVersion
         self.id = id
         self.title = title
+        self.patternDescription = patternDescription
         self.technique = technique
         self.width = width
         self.height = height
@@ -152,6 +156,7 @@ struct PatternDocument: Codable, Identifiable {
 
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
+        patternDescription = try container.decodeIfPresent(String.self, forKey: .patternDescription) ?? ""
         technique = try container.decode(PatternTechnique.self, forKey: .technique)
         width = try container.decode(Int.self, forKey: .width)
         height = try container.decode(Int.self, forKey: .height)
@@ -173,6 +178,7 @@ struct PatternDocument: Codable, Identifiable {
         try container.encode(Self.currentFileFormatVersion, forKey: .fileFormatVersion)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
+        try container.encode(patternDescription, forKey: .patternDescription)
         try container.encode(technique, forKey: .technique)
         try container.encode(width, forKey: .width)
         try container.encode(height, forKey: .height)

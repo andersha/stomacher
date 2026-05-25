@@ -173,6 +173,13 @@ final class PatternStore: ObservableObject {
         touch()
     }
 
+    func updateDescription(_ description: String) {
+        guard canEditPattern else { return }
+        document.patternDescription = description
+        touch()
+        statusMessage = "Oppdatert beskrivelse"
+    }
+
     func updateTechnique(_ technique: PatternTechnique) {
         guard canEditPattern else { return }
         document.technique = technique

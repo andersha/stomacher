@@ -395,6 +395,7 @@ private struct HelpOverlayView: View {
 
                         HelpSection(title: "Dokument") {
                             HelpItem(systemImage: "textformat", title: "Navn", text: "Endrer mønsternavnet som brukes ved lagring, eksport og visning i dokumentlisten.")
+                            HelpItem(systemImage: "text.alignleft", title: "Beskrivelse", text: "Åpner et stort tekstfelt der du kan skrive en detaljert mønsterbeskrivelse. Teksten lagres i .stom-filen sammen med mønsteret.")
                             HelpItem(systemImage: "rectangle.expand.vertical", title: "Bredde og høyde", text: "Endrer antall ruter i arbeidsflaten. Hvis en mindre størrelse fjerner tegnede ruter, får du en advarsel først.")
                             HelpItem(systemImage: "square.grid.3x3", title: "Ruteblokk", text: "Bestemmer avstanden mellom kraftigere hjelpelinjer, for eksempel hver 10. rute.")
                             HelpItem(systemImage: "shield", title: "Beskytt", text: "Låser mønsteret mot redigering. Bruk dette når tegningen er klar for lesing eller sy-modus.")
@@ -509,6 +510,84 @@ private struct HelpItem: View {
     }
 }
 
+private struct DescriptionEditorOverlayView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: String
+    var onSave: (String) -> Void
+
+    init(description: String, onSave: @escaping (String) -> Void) {
+        _draft = State(initialValue: description)
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.24)
+                .ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 12) {
+                    Label("Beskrivelse", systemImage: "text.alignleft")
+                        .font(.title2.weight(.semibold))
+
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+
+                Divider()
+
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $draft)
+                        .font(.body)
+                        .padding(12)
+                        .scrollContentBackground(.hidden)
+                        .background(Color(uiColor: .secondarySystemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                    if draft.isEmpty {
+                        Text("Skriv en detaljert beskrivelse av mønsteret.")
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 20)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(20)
+
+                Divider()
+
+                HStack {
+                    Spacer()
+
+                    Button("Avbryt", role: .cancel) {
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Lagre") {
+                        onSave(draft)
+                        dismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .controlSize(.large)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 14)
+            }
+            .frame(maxWidth: 940, maxHeight: .infinity)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(.primary.opacity(0.08))
+            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 14)
+        }
+    }
+}
+
 private struct InspectorView: View {
     @ObservedObject var store: PatternStore
     @Binding var replaceSourceID: UUID
@@ -516,6 +595,7 @@ private struct InspectorView: View {
     @State private var pendingResize: GridResizeRequest?
     @State private var showingResizeWarning = false
     @State private var showingOutlineDeleteConfirmation = false
+    @State private var showingDescriptionEditor = false
     @State private var showingSewingStartDialog = false
     var exportPDF: () -> Void
     var startSewing: (SewingStartCorner) -> Void
@@ -537,6 +617,12 @@ private struct InspectorView: View {
                     } set: { newValue in
                         store.updateTitle(newValue)
                     })
+
+                    Button {
+                        showingDescriptionEditor = true
+                    } label: {
+                        Label("Beskrivelse", systemImage: "text.alignleft")
+                    }
 
                     Stepper("Bredde: \(store.document.width)", value: Binding {
                         store.document.width
@@ -814,6 +900,12 @@ private struct InspectorView: View {
             Button("Ja", role: .destructive) {
                 store.clearOutline()
             }
+        }
+        .fullScreenCover(isPresented: $showingDescriptionEditor) {
+            DescriptionEditorOverlayView(description: store.document.patternDescription) { description in
+                store.updateDescription(description)
+            }
+            .presentationBackground(.clear)
         }
         .confirmationDialog("Start sying fra", isPresented: $showingSewingStartDialog, titleVisibility: .visible) {
             ForEach(SewingStartCorner.allCases) { corner in
