@@ -456,7 +456,7 @@ private struct HelpOverlayView: View {
                         }
 
                         HelpSection(title: "Palett og teknikk") {
-                            HelpItem(systemImage: "paintpalette", title: "Palett", text: "Velg innebygde eller egne paletter. Trykk en fargebrikke for å velge tegnefarge og gå til Tegn.")
+                            HelpItem(systemImage: "paintpalette", title: "Palett", text: "Velg innebygde eller egne paletter. Trykk en fargebrikke for å velge tegnefarge. Appen går til Tegn, bortsett fra når Fyll inn allerede er valgt.")
                             HelpItem(systemImage: "pencil", title: "Rediger palett", text: "Lag en egendefinert palett fra gjeldende palett. Du kan justere HEX, RGB, HSL, HSV og CMYK, velge nabofarger eller søke i DMC-farger.")
                             HelpItem(systemImage: "trash", title: "Slett egendefinert palett", text: "Fjerner valgt egendefinert palett. Innebygde paletter kan ikke slettes.")
                             HelpItem(systemImage: "circle.grid.cross", title: "Teknikk", text: "Velg om rutene skal tegnes og eksporteres som perler, korssting eller plattsøm. Antall utfylte felt vises under valget.")
@@ -859,7 +859,9 @@ private struct InspectorView: View {
                         ForEach(store.document.palette) { swatch in
                             Button {
                                 store.selectedSwatchID = swatch.id
-                                store.tool = .paint
+                                if store.tool != .fill {
+                                    store.tool = .paint
+                                }
                             } label: {
                                 VStack(spacing: 6) {
                                     Circle()
