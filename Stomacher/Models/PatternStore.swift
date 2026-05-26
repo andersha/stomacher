@@ -106,9 +106,12 @@ final class PatternStore: ObservableObject {
     @Published var pendingFillConfirmation: PendingFillConfirmation?
     @Published private(set) var customPalettes: [PatternPalette] = []
     @Published private(set) var currentDocumentURL: URL?
+    @Published private(set) var canUndo = false
+    @Published private(set) var canRedo = false
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let maximumHistoryDepth = 5
     private static let applePencilEditingKey = "no.abrahamsen.stomacher.usesApplePencilForEditing"
     private static let autolockEnabledKey = "no.abrahamsen.stomacher.isAutolockEnabled"
     private let customPalettesKey = "no.abrahamsen.stomacher.customPalettes"
@@ -117,6 +120,10 @@ final class PatternStore: ObservableObject {
     private var interactionPreviousCoordinate: GridCoordinate?
     private var patternMoveSnapshot: PatternMoveSnapshot?
     private var patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+    private var undoStack: [PatternHistorySnapshot] = []
+    private var redoStack: [PatternHistorySnapshot] = []
+    private var activeHistorySnapshot: PatternHistorySnapshot?
+    private var activeHistoryDidChange = false
 
     init(document: PatternDocument = PatternDocument()) {
         self.document = document
@@ -181,37 +188,54 @@ final class PatternStore: ObservableObject {
 
     func updateTitle(_ title: String) {
         guard canEditPattern else { return }
+        guard document.title != title else { return }
+        beginUndoStep()
         document.title = title
         touch()
+        commitUndoStep()
     }
 
     func updateDescription(_ description: String) {
         guard canEditPattern else { return }
+        guard document.patternDescription != description else { return }
+        beginUndoStep()
         document.patternDescription = description
         touch()
+        commitUndoStep()
         statusMessage = "Oppdatert beskrivelse"
     }
 
     func updateTechnique(_ technique: PatternTechnique) {
         guard canEditPattern else { return }
+        guard document.technique != technique else { return }
+        beginUndoStep()
         document.technique = technique
         touch()
+        commitUndoStep()
     }
 
     func updateGridBlockSize(_ gridBlockSize: Int) {
         guard canEditPattern else { return }
-        document.gridBlockSize = PatternDocument.normalizedGridBlockSize(gridBlockSize)
+        let normalizedGridBlockSize = PatternDocument.normalizedGridBlockSize(gridBlockSize)
+        guard document.gridBlockSize != normalizedGridBlockSize else { return }
+        beginUndoStep()
+        document.gridBlockSize = normalizedGridBlockSize
         touch()
+        commitUndoStep()
     }
 
     func updateHideUnusedArea(_ hideUnusedArea: Bool) {
         guard canEditPattern else { return }
+        guard document.hideUnusedArea != hideUnusedArea else { return }
+        beginUndoStep()
         document.hideUnusedArea = hideUnusedArea
         touch()
+        commitUndoStep()
     }
 
     func updateProtected(_ isProtected: Bool) {
         guard document.isProtected != isProtected else { return }
+        beginUndoStep()
         document.isProtected = isProtected
         if isProtected {
             tool = .hand
@@ -222,6 +246,7 @@ final class PatternStore: ObservableObject {
             statusMessage = "Beskyttelse er slått av"
         }
         touch()
+        commitUndoStep()
     }
 
     func startSewing(from startCorner: SewingStartCorner) {
@@ -352,6 +377,7 @@ final class PatternStore: ObservableObject {
 
     func endInteraction() {
         commitPatternMove()
+        commitUndoStep()
         selectionAnchor = nil
         interactionPreviousCoordinate = nil
         patternMoveSnapshot = nil
@@ -375,18 +401,30 @@ final class PatternStore: ObservableObject {
                 statusMessage = "Utenfor ytterkant"
                 return
             }
+            guard document.cells[coordinate] != selectedSwatchID else { return }
+            beginUndoStep()
             document.cells[coordinate] = selectedSwatchID
             selection.removeAll()
             touch()
         case .fill:
             statusMessage = "Trykk i et område for å fylle"
         case .erase:
+            let hasCell = document.cells[coordinate] != nil
+            let hasOutline = document.outlineCells.contains(coordinate)
+            guard hasCell || hasOutline else {
+                selection.remove(coordinate)
+                statusMessage = "Visket"
+                return
+            }
+            beginUndoStep()
             let removedOutline = document.outlineCells.remove(coordinate) != nil
             document.cells.removeValue(forKey: coordinate)
             selection.remove(coordinate)
             touch()
             statusMessage = removedOutline ? "Fjernet ytterkant" : "Visket"
         case .outline:
+            guard !document.outlineCells.contains(coordinate) else { return }
+            beginUndoStep()
             document.outlineCells.insert(coordinate)
             selection.removeAll()
             touch()
@@ -422,9 +460,11 @@ final class PatternStore: ObservableObject {
         let snapshot = clipboardSnapshotForSelection()
         guard !snapshot.isEmpty else { return }
 
+        beginUndoStep()
         clipboard = snapshot
         clearCells(in: selection)
         touch()
+        commitUndoStep()
         statusMessage = "Klippet ut \(clipboard.count) felt"
     }
 
@@ -433,15 +473,23 @@ final class PatternStore: ObservableObject {
         guard !clipboard.isEmpty else { return }
         let origin = lastTouchedCoordinate ?? GridCoordinate(x: document.width / 2, y: document.height / 2)
 
+        var didChange = false
         for (offset, swatchID) in clipboard {
             let target = GridCoordinate(x: origin.x + offset.x, y: origin.y + offset.y)
             guard contains(target) else { continue }
             guard document.isWithinPatternArea(target) else { continue }
+            if !didChange, document.cells[target] != swatchID {
+                beginUndoStep()
+                didChange = true
+            }
             document.cells[target] = swatchID
         }
 
         selection = Set(clipboard.keys.map { GridCoordinate(x: origin.x + $0.x, y: origin.y + $0.y) })
-        touch()
+        if didChange {
+            touch()
+            commitUndoStep()
+        }
         statusMessage = "Limte inn \(clipboard.count) felt"
     }
 
@@ -463,6 +511,8 @@ final class PatternStore: ObservableObject {
         guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
+        guard !snapshot.isEmpty else { return }
+        beginUndoStep()
         clearCells(in: selection)
 
         var newSelection = Set<GridCoordinate>()
@@ -477,12 +527,15 @@ final class PatternStore: ObservableObject {
 
         selection = newSelection
         touch()
+        commitUndoStep()
     }
 
     func completeQuarterAsSquare() {
         guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
+        guard !snapshot.isEmpty else { return }
+        beginUndoStep()
         var newSelection = selection
 
         for (coordinate, swatchID) in snapshot {
@@ -503,16 +556,20 @@ final class PatternStore: ObservableObject {
 
         selection = newSelection
         touch()
+        commitUndoStep()
         statusMessage = "Bygget kvadrat fra markert kvart"
     }
 
     func replaceColor(from source: UUID, to target: UUID) {
         guard canEditPattern else { return }
         guard source != target else { return }
+        guard document.cells.values.contains(source) else { return }
+        beginUndoStep()
         for (coordinate, swatchID) in document.cells where swatchID == source {
             document.cells[coordinate] = target
         }
         touch()
+        commitUndoStep()
         statusMessage = "Byttet farge"
     }
 
@@ -530,11 +587,14 @@ final class PatternStore: ObservableObject {
     func applyPalette(id: UUID) {
         guard canEditPattern else { return }
         guard let palette = palettes.first(where: { $0.id == id }) else { return }
+        guard document.paletteID != palette.id || document.paletteName != palette.name || document.palette != PatternPalette.normalizedSwatches(palette.swatches) else { return }
+        beginUndoStep()
         document.paletteID = palette.id
         document.paletteName = palette.name
         document.palette = PatternPalette.normalizedSwatches(palette.swatches)
         selectedSwatchID = document.palette.first(where: { $0.id == selectedSwatchID })?.id ?? document.palette.first?.id ?? selectedSwatchID
         touch()
+        commitUndoStep()
         statusMessage = "Palett: \(palette.name)"
     }
 
@@ -580,6 +640,8 @@ final class PatternStore: ObservableObject {
 
     func resize(width: Int, height: Int) {
         guard canEditPattern else { return }
+        guard document.width != width || document.height != height else { return }
+        beginUndoStep()
         document.width = width
         document.height = height
         document.cells = document.cells.filter { coordinate, _ in
@@ -592,6 +654,7 @@ final class PatternStore: ObservableObject {
             coordinate.x >= 0 && coordinate.x < width && coordinate.y >= 0 && coordinate.y < height
         }
         touch()
+        commitUndoStep()
         statusMessage = "Endret arbeidsflate"
     }
 
@@ -676,6 +739,7 @@ final class PatternStore: ObservableObject {
         currentDocumentURL = url
         statusMessage = "Åpnet \(document.title)"
         hasUnsavedChanges = false
+        resetHistory()
     }
 
     func newDocument() {
@@ -687,13 +751,38 @@ final class PatternStore: ObservableObject {
         currentDocumentURL = nil
         statusMessage = "Ny arbeidsflate"
         hasUnsavedChanges = false
+        resetHistory()
     }
 
     func clearOutline() {
         guard canEditPattern else { return }
+        guard !document.outlineCells.isEmpty else { return }
+        beginUndoStep()
         document.outlineCells.removeAll()
         touch()
+        commitUndoStep()
         statusMessage = "Fjernet ytterkant"
+    }
+
+    func undo() {
+        guard let snapshot = undoStack.popLast() else { return }
+        activeHistorySnapshot = nil
+        activeHistoryDidChange = false
+        redoStack.append(historySnapshot())
+        restoreHistorySnapshot(snapshot)
+        updateHistoryAvailability()
+        statusMessage = "Angret siste endring"
+    }
+
+    func redo() {
+        guard let snapshot = redoStack.popLast() else { return }
+        activeHistorySnapshot = nil
+        activeHistoryDidChange = false
+        undoStack.append(historySnapshot())
+        trimUndoStack()
+        restoreHistorySnapshot(snapshot)
+        updateHistoryAvailability()
+        statusMessage = "Gjorde om siste angring"
     }
 
     func markSaved(to url: URL? = nil, message: String? = nil) {
@@ -721,6 +810,8 @@ final class PatternStore: ObservableObject {
         guard canEditPattern else { return }
         guard let bounds = selection.bounds else { return }
         let snapshot = selectedPaintedCells()
+        guard !snapshot.isEmpty else { return }
+        beginUndoStep()
         clearCells(in: selection)
 
         var newSelection = Set<GridCoordinate>()
@@ -733,6 +824,7 @@ final class PatternStore: ObservableObject {
 
         selection = newSelection
         touch()
+        commitUndoStep()
     }
 
     private func beginPatternMove(at coordinate: GridCoordinate) {
@@ -781,12 +873,14 @@ final class PatternStore: ObservableObject {
         let offset = patternMovePreviewOffset
         guard offset != GridCoordinate(x: 0, y: 0) else { return }
 
+        beginUndoStep()
         document.cells = snapshot.cells.reduce(into: [:]) { movedCells, entry in
             movedCells[entry.key.offsetBy(x: offset.x, y: offset.y)] = entry.value
         }
         document.outlineCells = Set(snapshot.outlineCells.map { $0.offsetBy(x: offset.x, y: offset.y) })
         selection = Set(snapshot.selection.map { $0.offsetBy(x: offset.x, y: offset.y) }.filter(contains))
         touch()
+        commitUndoStep()
     }
 
     private var patternContentBounds: GridBounds? {
@@ -873,12 +967,14 @@ final class PatternStore: ObservableObject {
     }
 
     private func applyFill(targets: [GridCoordinate], swatchID: UUID) {
+        beginUndoStep()
         for coordinate in targets {
             document.cells[coordinate] = swatchID
         }
 
         selection.removeAll()
         touch()
+        commitUndoStep()
         statusMessage = "Fylte \(targets.count) ruter"
     }
 
@@ -945,16 +1041,84 @@ final class PatternStore: ObservableObject {
     private func touch() {
         document.updatedAt = Date()
         hasUnsavedChanges = true
+        if activeHistorySnapshot != nil {
+            activeHistoryDidChange = true
+        }
     }
 
     private func addOutlineLine(from start: GridCoordinate, to end: GridCoordinate) {
-        for coordinate in coordinatesOnLine(from: start, to: end) where contains(coordinate) {
+        let coordinates = coordinatesOnLine(from: start, to: end).filter(contains)
+        guard coordinates.contains(where: { !document.outlineCells.contains($0) }) else { return }
+
+        beginUndoStep()
+        for coordinate in coordinates {
             document.outlineCells.insert(coordinate)
         }
-
         selection.removeAll()
         touch()
         statusMessage = document.activePatternArea() == nil ? "Tegn en lukket ytterkant" : "Ytterkant"
+    }
+
+    private func beginUndoStep() {
+        guard activeHistorySnapshot == nil else { return }
+        activeHistorySnapshot = historySnapshot()
+        activeHistoryDidChange = false
+    }
+
+    private func commitUndoStep() {
+        guard let snapshot = activeHistorySnapshot else { return }
+        activeHistorySnapshot = nil
+        guard activeHistoryDidChange else {
+            activeHistoryDidChange = false
+            return
+        }
+
+        undoStack.append(snapshot)
+        trimUndoStack()
+        redoStack.removeAll()
+        activeHistoryDidChange = false
+        updateHistoryAvailability()
+    }
+
+    private func historySnapshot() -> PatternHistorySnapshot {
+        PatternHistorySnapshot(
+            document: document,
+            selection: selection,
+            selectedSwatchID: selectedSwatchID
+        )
+    }
+
+    private func restoreHistorySnapshot(_ snapshot: PatternHistorySnapshot) {
+        document = snapshot.document
+        document.updatedAt = Date()
+        selection = snapshot.selection
+        selectedSwatchID = document.palette.contains(where: { $0.id == snapshot.selectedSwatchID })
+            ? snapshot.selectedSwatchID
+            : document.palette.first?.id ?? selectedSwatchID
+        pendingFillConfirmation = nil
+        patternMoveSnapshot = nil
+        patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
+        patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+        hasUnsavedChanges = true
+    }
+
+    private func resetHistory() {
+        undoStack.removeAll()
+        redoStack.removeAll()
+        activeHistorySnapshot = nil
+        activeHistoryDidChange = false
+        updateHistoryAvailability()
+    }
+
+    private func trimUndoStack() {
+        if undoStack.count > maximumHistoryDepth {
+            undoStack.removeFirst(undoStack.count - maximumHistoryDepth)
+        }
+    }
+
+    private func updateHistoryAvailability() {
+        canUndo = !undoStack.isEmpty
+        canRedo = !redoStack.isEmpty
     }
 
     private func coordinatesOnLine(from start: GridCoordinate, to end: GridCoordinate) -> [GridCoordinate] {
@@ -1094,6 +1258,12 @@ private struct PatternMoveSnapshot {
     var cells: [GridCoordinate: UUID]
     var outlineCells: Set<GridCoordinate>
     var selection: Set<GridCoordinate>
+}
+
+private struct PatternHistorySnapshot {
+    var document: PatternDocument
+    var selection: Set<GridCoordinate>
+    var selectedSwatchID: UUID
 }
 
 private struct PreparedDirectory {

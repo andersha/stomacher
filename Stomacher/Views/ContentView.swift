@@ -72,6 +72,22 @@ struct ContentView: View {
 
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
+                        store.undo()
+                    } label: {
+                        Label("Angre", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!store.canUndo)
+                    .keyboardShortcut("z", modifiers: .command)
+
+                    Button {
+                        store.redo()
+                    } label: {
+                        Label("Gjør om", systemImage: "arrow.uturn.forward")
+                    }
+                    .disabled(!store.canRedo)
+                    .keyboardShortcut("z", modifiers: [.command, .shift])
+
+                    Button {
                         if store.hasUnsavedChanges {
                             showingNewConfirmation = true
                         } else {
@@ -401,6 +417,7 @@ private struct HelpOverlayView: View {
 
                         HelpSection(title: "Toppknapper") {
                             HelpItem(systemImage: "minus.magnifyingglass", title: "Zoom", text: "Bruk minus, pluss og 100 % for å zoome arbeidsflaten. Du kan også klype på lerretet.")
+                            HelpItem(systemImage: "arrow.uturn.backward", title: "Angre og gjør om", text: "Angre de siste mønsterendringene og gjør dem om igjen. Appen husker inntil fem steg; et tegnestrøk, en flytting eller en Fyll inn-handling teller som ett steg.")
                             HelpItem(systemImage: "doc.badge.plus", title: "Ny", text: "Starter et nytt mønster. Hvis gjeldende mønster har ulagrede endringer, blir du bedt om å bekrefte først.")
                             HelpItem(systemImage: "square.and.arrow.down", title: "Lagre", text: "Lagrer til valgt .stom-fil. Menyen inneholder også Lagre som for ny plassering og Send til for deling.")
                             HelpItem(systemImage: "folder", title: "Åpne", text: "Viser lagrede mønstre med forhåndsvisning. Fra annet sted åpner en .stom-fil via filvelgeren.")
