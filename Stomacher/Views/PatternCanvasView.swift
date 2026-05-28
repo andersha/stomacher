@@ -140,8 +140,12 @@ struct PatternCanvasView: View {
         let symbolTemplates = CellSymbolTemplates(cellSize: cellSize)
         var coordinatesBySwatchID: [UUID: [GridCoordinate]] = [:]
 
+        let movingSelection = store.isMovingSelection
+        let selectionOffset = store.selectionMovePreviewOffset
+
         for (coordinate, swatchID) in store.document.cells {
-            let displayCoordinate = coordinate.offsetBy(x: offset.x, y: offset.y)
+            let cellOffset = (movingSelection && store.selection.contains(coordinate)) ? selectionOffset : offset
+            let displayCoordinate = coordinate.offsetBy(x: cellOffset.x, y: cellOffset.y)
             guard colorBySwatchID[swatchID] != nil else { continue }
             guard patternArea?.contains(coordinate) ?? true else { continue }
             coordinatesBySwatchID[swatchID, default: []].append(displayCoordinate)
@@ -287,8 +291,9 @@ struct PatternCanvasView: View {
     }
 
     private func drawSelection(in context: inout GraphicsContext, offset: GridCoordinate) {
+        let selectionOffset = store.isMovingSelection ? store.selectionMovePreviewOffset : offset
         for coordinate in store.selection {
-            let displayCoordinate = coordinate.offsetBy(x: offset.x, y: offset.y)
+            let displayCoordinate = coordinate.offsetBy(x: selectionOffset.x, y: selectionOffset.y)
             let rect = rect(for: displayCoordinate).insetBy(dx: 1.5, dy: 1.5)
             context.stroke(Path(roundedRect: rect, cornerRadius: 2), with: .color(.blue), lineWidth: 2)
         }

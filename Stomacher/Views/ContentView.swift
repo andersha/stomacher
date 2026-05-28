@@ -448,11 +448,19 @@ private struct HelpOverlayView: View {
                             HelpItem(systemImage: "doc.on.doc", title: "Kopier", text: "Kopierer markerte, utfylte ruter til intern utklippstavle.")
                             HelpItem(systemImage: "scissors", title: "Klipp ut", text: "Kopierer markeringen og fjerner de markerte rutene fra mønsteret.")
                             HelpItem(systemImage: "doc.on.clipboard", title: "Lim inn", text: "Setter inn kopierte ruter ved siste berørte rute, eller omtrent midt på arbeidsflaten hvis ingen rute er valgt.")
+                            HelpItem(systemImage: "arrow.up.and.down.and.arrow.left.and.right", title: "Flytt markering", text: "Dra de markerte rutene med finger eller Apple Pencil dit du vil ha dem. Innholdet følger med, og i motsetning til hoved-flyttingen påvirker dette bare markeringen, ikke hele mønsteret.")
                             HelpItem(systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right", title: "Speil horisontalt", text: "Speiler markeringen fra venstre til høyre innenfor markeringens yttergrenser.")
                             HelpItem(systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down", title: "Speil vertikalt", text: "Speiler markeringen opp og ned innenfor markeringens yttergrenser.")
                             HelpItem(systemImage: "rotate.right", title: "Roter 90°", text: "Roterer de markerte, utfylte rutene 90 grader med klokken.")
                             HelpItem(systemImage: "square.grid.2x2", title: "Lag kvadrat av 1/4", text: "Bruker markert kvart mønster som utgangspunkt og speiler det til et fullt kvadrat.")
                             HelpItem(systemImage: "xmark.circle", title: "Fjern markering", text: "Tømmer markeringen uten å slette rutene i mønsteret.")
+                        }
+
+                        HelpSection(title: "Generer fra markering") {
+                            HelpItem(systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right", title: "Speil til par (vannrett)", text: "Bruker markeringen som motiv og setter en speilvendt kopi ved siden av, til en dobbelt så bred blokk.")
+                            HelpItem(systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down", title: "Speil til par (loddrett)", text: "Bruker markeringen som motiv og setter en speilvendt kopi under, til en dobbelt så høy blokk.")
+                            HelpItem(systemImage: "arrow.triangle.2.circlepath", title: "Roter til rosett", text: "Plasserer fire 90°-roterte kopier av motivet rundt et felles senter.")
+                            HelpItem(systemImage: "square.grid.3x3", title: "Fliselegg", text: "Gjentar motivet i et rutemønster. Velg antall kolonner og rader, og om annenhver kolonne eller rad skal speiles for sømløse bord.")
                         }
 
                         HelpSection(title: "Palett og teknikk") {
@@ -628,6 +636,10 @@ private struct InspectorView: View {
     @State private var showingOutlineDeleteConfirmation = false
     @State private var showingDescriptionEditor = false
     @State private var showingSewingStartDialog = false
+    @State private var tileColumns = 3
+    @State private var tileRows = 3
+    @State private var flipAlternateColumns = false
+    @State private var flipAlternateRows = false
     var exportPDF: () -> Void
     var startSewing: (SewingStartCorner) -> Void
     var resumeSewing: () -> Void
@@ -765,6 +777,34 @@ private struct InspectorView: View {
 
                                 ToolDetailButton(title: "Lag kvadrat av 1/4", systemImage: "square.grid.2x2") {
                                     store.completeQuarterAsSquare()
+                                }
+                                .disabled(store.selection.isEmpty)
+
+                                Text("Generer fra markering")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+
+                                ForEach(SymmetryKind.allCases) { kind in
+                                    ToolDetailButton(title: kind.title, systemImage: kind.systemImage) {
+                                        store.generateSymmetry(kind)
+                                    }
+                                    .disabled(store.selection.isEmpty)
+                                }
+
+                                Stepper("Kolonner: \(tileColumns)", value: $tileColumns, in: 1...20)
+                                Stepper("Rader: \(tileRows)", value: $tileRows, in: 1...20)
+                                Toggle("Speil annenhver kolonne", isOn: $flipAlternateColumns)
+                                Toggle("Speil annenhver rad", isOn: $flipAlternateRows)
+
+                                ToolDetailButton(title: "Fliselegg", systemImage: "square.grid.3x3") {
+                                    store.generateTiling(
+                                        TilingOptions(
+                                            columns: tileColumns,
+                                            rows: tileRows,
+                                            flipAlternateColumns: flipAlternateColumns,
+                                            flipAlternateRows: flipAlternateRows
+                                        )
+                                    )
                                 }
                                 .disabled(store.selection.isEmpty)
 

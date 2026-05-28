@@ -90,6 +90,8 @@ final class PatternStore: ObservableObject {
     @Published var clipboard: [GridCoordinate: UUID] = [:]
     @Published var zoom: CGFloat = 1
     @Published private(set) var patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
+    @Published private(set) var selectionMovePreviewOffset = GridCoordinate(x: 0, y: 0)
+    @Published private(set) var isMovingSelection = false
     @Published var usesApplePencilForEditing = false {
         didSet {
             UserDefaults.standard.set(usesApplePencilForEditing, forKey: Self.applePencilEditingKey)
@@ -120,6 +122,7 @@ final class PatternStore: ObservableObject {
     private var interactionPreviousCoordinate: GridCoordinate?
     private var patternMoveSnapshot: PatternMoveSnapshot?
     private var patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+    private var selectionMoveSnapshot: SelectionMoveSnapshot?
     private var undoStack: [PatternHistorySnapshot] = []
     private var redoStack: [PatternHistorySnapshot] = []
     private var activeHistorySnapshot: PatternHistorySnapshot?
@@ -338,6 +341,11 @@ final class PatternStore: ObservableObject {
             return
         }
 
+        if tool == .select, selection.contains(coordinate) {
+            beginSelectionMove(at: coordinate)
+            return
+        }
+
         selectionAnchor = coordinate
         interactionPreviousCoordinate = coordinate
 
@@ -357,6 +365,10 @@ final class PatternStore: ObservableObject {
         }
 
         guard canEditPattern else { return }
+        if isMovingSelection {
+            updateSelectionMove(to: coordinate)
+            return
+        }
         if tool == .hand, moveMode == .pattern {
             updatePatternMove(to: coordinate)
             return
@@ -377,12 +389,16 @@ final class PatternStore: ObservableObject {
 
     func endInteraction() {
         commitPatternMove()
+        commitSelectionMove()
         commitUndoStep()
         selectionAnchor = nil
         interactionPreviousCoordinate = nil
         patternMoveSnapshot = nil
         patternMovePreviewOffset = GridCoordinate(x: 0, y: 0)
         patternMoveAppliedOffset = GridCoordinate(x: 0, y: 0)
+        selectionMoveSnapshot = nil
+        isMovingSelection = false
+        selectionMovePreviewOffset = GridCoordinate(x: 0, y: 0)
     }
 
     func handleTapOrDrag(at coordinate: GridCoordinate) {
@@ -571,6 +587,71 @@ final class PatternStore: ObservableObject {
         touch()
         commitUndoStep()
         statusMessage = "Byttet farge"
+    }
+
+    // MARK: - Mønstergenerering
+
+    /// Motivet som er bygd fra gjeldende markering, normalisert til (0,0).
+    /// Brukes som inngang til all prosedyrebasert generering.
+    var currentMotif: PatternMotif? {
+        let snapshot = clipboardSnapshotForSelection()
+        guard !snapshot.isEmpty else { return nil }
+        return PatternMotif(cells: snapshot)
+    }
+
+    func generateSymmetry(_ kind: SymmetryKind) {
+        guard canEditPattern else { return }
+        guard let motif = currentMotif, let bounds = selection.bounds else {
+            statusMessage = "Marker et motiv først"
+            return
+        }
+        let generated = PatternGenerator.symmetry(kind, motif: motif)
+        if applyMotif(generated, anchoredAt: GridCoordinate(x: bounds.minX, y: bounds.minY)) {
+            statusMessage = "Genererte: \(kind.title)"
+        }
+    }
+
+    func generateTiling(_ options: TilingOptions) {
+        guard canEditPattern else { return }
+        guard let motif = currentMotif, let bounds = selection.bounds else {
+            statusMessage = "Marker et motiv først"
+            return
+        }
+        let generated = PatternGenerator.tiled(options, motif: motif)
+        if applyMotif(generated, anchoredAt: GridCoordinate(x: bounds.minX, y: bounds.minY)) {
+            let count = max(1, options.columns) * max(1, options.rows)
+            statusMessage = "Flisla \(count) motiv"
+        }
+    }
+
+    /// Plasserer et generert motiv på rutenettet med anker i øvre venstre hjørne.
+    /// Følger samme angre-mønster som `pasteClipboard()` og klamper til både
+    /// rutenettkant og aktiv ytterkant. Returnerer `false` hvis ingen ruter fikk
+    /// plass (da legges det ingen oppføring i angre-stakken).
+    @discardableResult
+    private func applyMotif(_ motif: PatternMotif, anchoredAt anchor: GridCoordinate) -> Bool {
+        guard canEditPattern, !motif.isEmpty else { return false }
+
+        beginUndoStep()
+        var placed = Set<GridCoordinate>()
+        placed.reserveCapacity(motif.cells.count)
+        for (offset, swatchID) in motif.cells {
+            let target = GridCoordinate(x: anchor.x + offset.x, y: anchor.y + offset.y)
+            guard contains(target), document.isWithinPatternArea(target) else { continue }
+            document.cells[target] = swatchID
+            placed.insert(target)
+        }
+
+        guard !placed.isEmpty else {
+            commitUndoStep()
+            statusMessage = "Ingen ruter fikk plass"
+            return false
+        }
+
+        selection = placed
+        touch()
+        commitUndoStep()
+        return true
     }
 
     func confirmPendingFill() {
@@ -906,6 +987,70 @@ final class PatternStore: ObservableObject {
             movedCells[entry.key.offsetBy(x: offset.x, y: offset.y)] = entry.value
         }
         document.outlineCells = Set(snapshot.outlineCells.map { $0.offsetBy(x: offset.x, y: offset.y) })
+        selection = Set(snapshot.selection.map { $0.offsetBy(x: offset.x, y: offset.y) }.filter(contains))
+        touch()
+        commitUndoStep()
+    }
+
+    // MARK: - Flytt markering (dra med finger/Apple Pencil)
+
+    /// Starter en dra-flytting av de markerte rutene. Tas et øyeblikksbilde av
+    /// markeringen og innholdet i den, slik at `updateSelectionMove` kan vise en
+    /// live forhåndsvisning og `commitSelectionMove` kan påføre forflytningen i
+    /// ett angre-steg.
+    private func beginSelectionMove(at coordinate: GridCoordinate) {
+        guard canEditPattern else { return }
+        guard let bounds = selection.bounds else {
+            statusMessage = "Ingen markering å flytte"
+            return
+        }
+
+        selectionMoveSnapshot = SelectionMoveSnapshot(
+            start: coordinate,
+            bounds: bounds,
+            selection: selection,
+            cells: selectedPaintedCells()
+        )
+        isMovingSelection = true
+        selectionMovePreviewOffset = GridCoordinate(x: 0, y: 0)
+        statusMessage = "Flytter markering"
+    }
+
+    private func updateSelectionMove(to coordinate: GridCoordinate) {
+        guard canEditPattern else { return }
+        guard let snapshot = selectionMoveSnapshot else { return }
+
+        let requestedOffset = GridCoordinate(
+            x: coordinate.x - snapshot.start.x,
+            y: coordinate.y - snapshot.start.y
+        )
+        let offset = clampedMoveOffset(requestedOffset, for: snapshot.bounds)
+        guard offset != selectionMovePreviewOffset else {
+            if offset != requestedOffset {
+                statusMessage = "Kanten er nådd"
+            }
+            return
+        }
+
+        selectionMovePreviewOffset = offset
+        statusMessage = "Flyttet markering \(offset.x), \(offset.y)"
+    }
+
+    private func commitSelectionMove() {
+        guard canEditPattern else { return }
+        guard let snapshot = selectionMoveSnapshot else { return }
+        let offset = selectionMovePreviewOffset
+        guard offset != GridCoordinate(x: 0, y: 0) else { return }
+
+        beginUndoStep()
+        for coordinate in snapshot.cells.keys {
+            document.cells[coordinate] = nil
+        }
+        for (coordinate, swatchID) in snapshot.cells {
+            let moved = coordinate.offsetBy(x: offset.x, y: offset.y)
+            guard contains(moved) else { continue }
+            document.cells[moved] = swatchID
+        }
         selection = Set(snapshot.selection.map { $0.offsetBy(x: offset.x, y: offset.y) }.filter(contains))
         touch()
         commitUndoStep()
@@ -1286,6 +1431,13 @@ private struct PatternMoveSnapshot {
     var cells: [GridCoordinate: UUID]
     var outlineCells: Set<GridCoordinate>
     var selection: Set<GridCoordinate>
+}
+
+private struct SelectionMoveSnapshot {
+    var start: GridCoordinate
+    var bounds: GridBounds
+    var selection: Set<GridCoordinate>
+    var cells: [GridCoordinate: UUID]
 }
 
 private struct PatternHistorySnapshot {
