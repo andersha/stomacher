@@ -764,6 +764,34 @@ final class PatternStore: ObservableObject {
         statusMessage = "Fjernet ytterkant"
     }
 
+    func autoDetectOutline() {
+        guard canEditPattern else { return }
+        let paintedCells = Set(document.cells.keys)
+        guard !paintedCells.isEmpty else { return }
+
+        var borderCells = Set<GridCoordinate>()
+        let offsets = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+
+        for cell in paintedCells {
+            let isBorder = offsets.contains { dx, dy in
+                let neighbor = GridCoordinate(x: cell.x + dx, y: cell.y + dy)
+                let outsideGrid = neighbor.x < 0 || neighbor.x >= document.width ||
+                                  neighbor.y < 0 || neighbor.y >= document.height
+                return outsideGrid || !paintedCells.contains(neighbor)
+            }
+            if isBorder {
+                borderCells.insert(cell)
+            }
+        }
+
+        guard !borderCells.isEmpty else { return }
+        beginUndoStep()
+        document.outlineCells = borderCells
+        touch()
+        commitUndoStep()
+        statusMessage = "Ytterkant funnet automatisk"
+    }
+
     func undo() {
         guard let snapshot = undoStack.popLast() else { return }
         activeHistorySnapshot = nil

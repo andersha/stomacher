@@ -821,6 +821,12 @@ private struct InspectorView: View {
                                     Text("Uten egen ytterkant brukes hele rutenettet som mønstergrense.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+
+                                    if !store.document.cells.isEmpty {
+                                        ToolDetailButton(title: "Finn automatisk", systemImage: "sparkle.magnifyingglass") {
+                                            store.autoDetectOutline()
+                                        }
+                                    }
                                 }
                             }
                             .listRowBackground(toolDetailBackground)
