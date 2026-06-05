@@ -191,10 +191,13 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = HM9572KML7;
 				INFOPLIST_FILE = Stomacher/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Bringeduk;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = no.abrahamsen.stomacher;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;
@@ -210,10 +213,13 @@
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				DEVELOPMENT_TEAM = HM9572KML7;
 				INFOPLIST_FILE = Stomacher/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Bringeduk;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.education";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = no.abrahamsen.stomacher;
 				SDKROOT = iphoneos;
 				SUPPORTS_MACCATALYST = NO;

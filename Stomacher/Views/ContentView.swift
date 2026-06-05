@@ -64,7 +64,11 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(PencilDoubleTapView(store: store))
+            .background {
+                if EditingInputSupport.supportsApplePencilEditing {
+                    PencilDoubleTapView(store: store)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     ZoomControls(store: store)
@@ -432,7 +436,7 @@ private struct HelpOverlayView: View {
                         }
 
                         HelpSection(title: "Verktøy") {
-                            HelpItem(systemImage: "applepencil", title: "Apple Pencil", text: "På iPad kan du la Apple Pencil redigere mønsteret mens fingrene brukes til flytting og zoom. Trykk én rute eller dra over flere; første berørte rute tegnes også. Double-tap på Pencil bytter mellom Tegn og Visk.")
+                            HelpItem(systemImage: "applepencil", title: "Apple Pencil", text: "På iPad kan du la Apple Pencil redigere mønsteret mens fingrene brukes til flytting og zoom. Trykk én rute eller dra over flere; første berørte rute tegnes også. Double-tap på Pencil bytter mellom Tegn og Visk. På Mac brukes mus eller trackpad, og Pencil-valget skjules.")
                             HelpItem(systemImage: "lock", title: "Autolås", text: "Når autolås er av, holder appen skjermen våken mens den er aktiv. Det er nyttig ved sying fra skjerm.")
                             HelpItem(systemImage: "hand.raised", title: "Flytt", text: "Flytter arbeidsflaten. Velg Ark for vanlig panorering, eller Mønster for å skyve selve innholdet i rutenettet.")
                             HelpItem(systemImage: "paintbrush.pointed", title: "Tegn", text: "Fyller ruter med valgt palettfarge. Tegning utenfor en lukket ytterkant blir stoppet.")
@@ -648,7 +652,7 @@ private struct InspectorView: View {
         Color(uiColor: .secondarySystemFill)
     }
     private var supportsApplePencilEditing: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
+        EditingInputSupport.supportsApplePencilEditing
     }
 
     var body: some View {
@@ -2087,7 +2091,7 @@ private struct ZoomControls: View {
 private struct StatusBar: View {
     @ObservedObject var store: PatternStore
     private var supportsApplePencilEditing: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
+        EditingInputSupport.supportsApplePencilEditing
     }
 
     var body: some View {

@@ -24,7 +24,7 @@ struct PatternCanvasView: View {
         colorScheme == .dark ? .black.opacity(0.34) : .secondary.opacity(0.36)
     }
     private var supportsApplePencilEditing: Bool {
-        UIDevice.current.userInterfaceIdiom == .pad
+        EditingInputSupport.supportsApplePencilEditing
     }
 
     var body: some View {
@@ -84,6 +84,10 @@ struct PatternCanvasView: View {
 
     private var isDrawInputEnabled: Bool {
         if store.document.isProtected {
+            if EditingInputSupport.isRunningOnMac {
+                return store.document.sewingProgress != nil
+            }
+
             return supportsApplePencilEditing && store.usesApplePencilForEditing && store.document.sewingProgress != nil
         }
 

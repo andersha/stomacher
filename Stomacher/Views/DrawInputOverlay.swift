@@ -1,6 +1,25 @@
 import SwiftUI
 import UIKit
 
+enum EditingInputSupport {
+    static var isRunningOnMac: Bool {
+        if ProcessInfo.processInfo.isiOSAppOnMac {
+            return true
+        }
+
+        #if targetEnvironment(macCatalyst)
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    @MainActor
+    static var supportsApplePencilEditing: Bool {
+        UIDevice.current.userInterfaceIdiom == .pad && !isRunningOnMac
+    }
+}
+
 struct DrawInputOverlay: UIViewRepresentable {
     var store: PatternStore
     var cellSize: CGFloat
@@ -98,7 +117,8 @@ struct DrawInputOverlay: UIViewRepresentable {
                 ? [NSNumber(value: UITouch.TouchType.pencil.rawValue)]
                 : [
                     NSNumber(value: UITouch.TouchType.direct.rawValue),
-                    NSNumber(value: UITouch.TouchType.pencil.rawValue)
+                    NSNumber(value: UITouch.TouchType.pencil.rawValue),
+                    NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)
                 ]
 
             drawGesture?.isEnabled = isEnabled
