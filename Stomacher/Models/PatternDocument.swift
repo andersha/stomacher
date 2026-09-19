@@ -217,23 +217,37 @@ struct PatternDocument: Codable, Identifiable {
         return area.contains(coordinate)
     }
 
+    struct PatternArea: Equatable {
+        var insideCells: Set<GridCoordinate>
+        var outsideCells: Set<GridCoordinate>
+    }
+
     func activePatternArea() -> Set<GridCoordinate>? {
+        computePatternArea()?.insideCells
+    }
+
+    /// Beregner innsiden og utsiden av ytterkanten i ett gjennomløp, slik at
+    /// kallere som trenger begge (f.eks. tegning av utenfor-området) slipper å
+    /// invertere settet på nytt selv. `PatternStore` mellomlagrer resultatet
+    /// siden dette er et helt rutenett-gjennomløp.
+    func computePatternArea() -> PatternArea? {
         guard hasCustomOutline else { return nil }
 
         let outside = outsideOutlineCells()
-        var area = Set<GridCoordinate>()
-        area.reserveCapacity(width * height - outside.count)
+        var inside = Set<GridCoordinate>()
+        inside.reserveCapacity(width * height - outside.count)
 
         for y in 0..<height {
             for x in 0..<width {
                 let coordinate = GridCoordinate(x: x, y: y)
                 if !outside.contains(coordinate) {
-                    area.insert(coordinate)
+                    inside.insert(coordinate)
                 }
             }
         }
 
-        return area.count > outlineCells.count ? area : nil
+        guard inside.count > outlineCells.count else { return nil }
+        return PatternArea(insideCells: inside, outsideCells: outside)
     }
 
     func swatch(for id: UUID) -> PaletteSwatch? {

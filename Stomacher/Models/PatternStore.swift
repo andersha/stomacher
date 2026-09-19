@@ -128,6 +128,14 @@ final class PatternStore: ObservableObject {
     private var activeHistorySnapshot: PatternHistorySnapshot?
     private var activeHistoryDidChange = false
 
+    private struct PatternAreaCacheKey: Equatable {
+        var outlineCells: Set<GridCoordinate>
+        var width: Int
+        var height: Int
+    }
+
+    private var patternAreaCache: (key: PatternAreaCacheKey, value: PatternDocument.PatternArea?)?
+
     init(document: PatternDocument = PatternDocument()) {
         self.document = document
         self.selectedSwatchID = document.palette.first?.id ?? UUID()
@@ -179,6 +187,21 @@ final class PatternStore: ObservableObject {
         let traversal = document.sewingTraversal(from: progress.startCorner)
         guard let currentIndex = traversal.firstIndex(of: progress.current), currentIndex > 0 else { return [] }
         return Set(traversal[..<currentIndex])
+    }
+
+    /// Mellomlagret variant av `document.computePatternArea()`. Selve
+    /// utregningen er et helt rutenett-gjennomløp (flood fill + inversjon),
+    /// så vi unngår å gjøre den på nytt for hver SwiftUI-tegning (f.eks. under
+    /// pinch-to-zoom eller panorering) med mindre ytterkanten eller
+    /// arkstørrelsen faktisk har endret seg.
+    var activePatternArea: PatternDocument.PatternArea? {
+        let key = PatternAreaCacheKey(outlineCells: document.outlineCells, width: document.width, height: document.height)
+        if let patternAreaCache, patternAreaCache.key == key {
+            return patternAreaCache.value
+        }
+        let value = document.computePatternArea()
+        patternAreaCache = (key, value)
+        return value
     }
 
     var canAdvanceSewingCell: Bool {

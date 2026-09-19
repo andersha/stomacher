@@ -5,6 +5,8 @@ struct PatternCanvasView: View {
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject var store: PatternStore
     @State private var pinchStartZoom: CGFloat?
+    @State private var liveZoomScale: CGFloat = 1
+    @State private var isPinching = false
 
     private var baseCellSize: CGFloat { 18 }
     private var cellSize: CGFloat { baseCellSize * store.zoom }
@@ -28,7 +30,7 @@ struct PatternCanvasView: View {
     }
 
     var body: some View {
-        let patternArea = store.document.activePatternArea()
+        let patternArea = store.activePatternArea
         let patternOffset = store.patternMovePreviewOffset
         let colorBySwatchID = Dictionary(uniqueKeysWithValues: store.document.palette.map { ($0.id, $0.color) })
         let sewingPassedCells = store.sewingPassedCells
@@ -49,6 +51,7 @@ struct PatternCanvasView: View {
                 }
                 .frame(width: canvasSize.width, height: canvasSize.height)
                 .background(canvasBackground)
+                .drawingGroup()
 
                 DrawInputOverlay(
                     store: store,
@@ -65,6 +68,7 @@ struct PatternCanvasView: View {
                 )
                 .frame(width: 1, height: 1)
             }
+            .scaleEffect(liveZoomScale, anchor: .topLeading)
             .padding(24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -74,15 +78,29 @@ struct PatternCanvasView: View {
                 .onChanged { value in
                     let baseZoom = pinchStartZoom ?? store.zoom
                     pinchStartZoom = baseZoom
-                    store.zoom = min(2.4, max(0.45, baseZoom * value))
+                    isPinching = true
+                    let proposedZoom = min(2.4, max(0.45, baseZoom * value))
+                    // Under selve klypebevegelsen skalerer vi bare visuelt med
+                    // `.scaleEffect` i stedet for å skrive til `store.zoom`.
+                    // Å skrive til `store.zoom` her ville tvunget frem full
+                    // ombygging av hele Canvas-tegningen (rutenett, ruter,
+                    // ytterkant osv.) på hver eneste gest-oppdatering, som er
+                    // det som gjorde store mønstre trege å zoome.
+                    liveZoomScale = proposedZoom / baseZoom
                 }
-                .onEnded { _ in
+                .onEnded { value in
+                    let baseZoom = pinchStartZoom ?? store.zoom
+                    store.zoom = min(2.4, max(0.45, baseZoom * value))
                     pinchStartZoom = nil
+                    liveZoomScale = 1
+                    isPinching = false
                 }
         )
     }
 
     private var isDrawInputEnabled: Bool {
+        guard !isPinching else { return false }
+
         if store.document.isProtected {
             if EditingInputSupport.isRunningOnMac {
                 return store.document.sewingProgress != nil
@@ -132,7 +150,7 @@ struct PatternCanvasView: View {
 
     private func drawCells(
         in context: inout GraphicsContext,
-        patternArea: Set<GridCoordinate>?,
+        patternArea: PatternDocument.PatternArea?,
         offset: GridCoordinate,
         colorBySwatchID: [UUID: Color]
     ) {
@@ -151,7 +169,7 @@ struct PatternCanvasView: View {
             let cellOffset = (movingSelection && store.selection.contains(coordinate)) ? selectionOffset : offset
             let displayCoordinate = coordinate.offsetBy(x: cellOffset.x, y: cellOffset.y)
             guard colorBySwatchID[swatchID] != nil else { continue }
-            guard patternArea?.contains(coordinate) ?? true else { continue }
+            guard patternArea?.insideCells.contains(coordinate) ?? true else { continue }
             coordinatesBySwatchID[swatchID, default: []].append(displayCoordinate)
         }
 
@@ -194,41 +212,47 @@ struct PatternCanvasView: View {
         }
     }
 
-    private func drawOutsidePatternArea(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?, offset: GridCoordinate) {
+    private func drawOutsidePatternArea(in context: inout GraphicsContext, patternArea: PatternDocument.PatternArea?, offset: GridCoordinate) {
         guard let patternArea else { return }
         guard !store.document.hideUnusedArea else { return }
         let outsideColor: Color = colorScheme == .dark ? .black.opacity(0.16) : .black.opacity(0.07)
-        var outsidePath = Path()
-
-        for y in 0..<store.document.height {
-            for x in 0..<store.document.width {
-                let coordinate = GridCoordinate(x: x, y: y)
-                let sourceCoordinate = coordinate.offsetBy(x: -offset.x, y: -offset.y)
-                guard !patternArea.contains(sourceCoordinate) else { continue }
-                outsidePath.addRect(rect(for: coordinate))
-            }
-        }
-
-        context.fill(outsidePath, with: .color(outsideColor))
+        context.fill(outsidePath(for: patternArea, offset: offset), with: .color(outsideColor))
     }
 
-    private func drawHiddenUnusedArea(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?, offset: GridCoordinate) {
+    private func drawHiddenUnusedArea(in context: inout GraphicsContext, patternArea: PatternDocument.PatternArea?, offset: GridCoordinate) {
         guard let patternArea, store.document.hideUnusedArea else { return }
-        var hiddenPath = Path()
+        context.fill(outsidePath(for: patternArea, offset: offset), with: .color(workspaceBackground))
+    }
+
+    /// Bygger stien over rutene utenfor ytterkanten. `patternArea.outsideCells`
+    /// er allerede beregnet (og mellomlagret av `PatternStore`), så vi kan gå
+    /// rett gjennom det settet i vanlig tilfelle (ingen forskyvning) i stedet
+    /// for å løpe gjennom hele rutenettet på nytt og invertere `insideCells`.
+    /// Ved aktiv mønsterflytting (`offset != 0`) faller vi tilbake til å teste
+    /// hver rute i det synlige rutenettet, siden forskyvningen kan avdekke
+    /// randceller som ikke finnes i det upåvirkede `outsideCells`-settet.
+    private func outsidePath(for patternArea: PatternDocument.PatternArea, offset: GridCoordinate) -> Path {
+        var path = Path()
+
+        guard offset.x != 0 || offset.y != 0 else {
+            for coordinate in patternArea.outsideCells {
+                path.addRect(rect(for: coordinate))
+            }
+            return path
+        }
 
         for y in 0..<store.document.height {
             for x in 0..<store.document.width {
                 let coordinate = GridCoordinate(x: x, y: y)
                 let sourceCoordinate = coordinate.offsetBy(x: -offset.x, y: -offset.y)
-                guard !patternArea.contains(sourceCoordinate) else { continue }
-                hiddenPath.addRect(rect(for: coordinate))
+                guard !patternArea.insideCells.contains(sourceCoordinate) else { continue }
+                path.addRect(rect(for: coordinate))
             }
         }
-
-        context.fill(hiddenPath, with: .color(workspaceBackground))
+        return path
     }
 
-    private func drawOutline(in context: inout GraphicsContext, patternArea: Set<GridCoordinate>?, offset: GridCoordinate) {
+    private func drawOutline(in context: inout GraphicsContext, patternArea: PatternDocument.PatternArea?, offset: GridCoordinate) {
         guard store.document.hasCustomOutline else { return }
 
         if let patternArea {
@@ -236,7 +260,7 @@ struct PatternCanvasView: View {
 
             for coordinate in store.document.outlineCells {
                 let displayCoordinate = coordinate.offsetBy(x: offset.x, y: offset.y)
-                addExteriorOutlineSegments(to: &outline, for: coordinate, displayCoordinate: displayCoordinate, patternArea: patternArea)
+                addExteriorOutlineSegments(to: &outline, for: coordinate, displayCoordinate: displayCoordinate, patternArea: patternArea.insideCells)
             }
 
             context.stroke(outline, with: .color(.red), lineWidth: max(2, cellSize * 0.16))
