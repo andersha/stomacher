@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import OSLog
+import Combine
 
 private let logger = Logger(subsystem: "no.abrahamsen.stomacher", category: "FileSystem")
 
